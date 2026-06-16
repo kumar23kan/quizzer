@@ -1,0 +1,7 @@
+# Quizzer hotspot sudoers — allow faculty user to run hotspot scripts without a password
+# Install with:
+#   sudo cp /home/kumar-perinbam/AI-work/quizzer/quizzer-sudoers /etc/sudoers.d/quizzer
+#   sudo chmod 440 /etc/sudoers.d/quizzer
+
+kumar-perinbam ALL=(root) NOPASSWD: /usr/bin/bash /home/kumar-perinbam/AI-work/quizzer/setup_hotspot.sh *
+kumar-perinbam ALL=(root) NOPASSWD: /usr/bin/bash /home/kumar-perinbam/AI-work/quizzer/teardown_hotspot.sh *

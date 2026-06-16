@@ -1,0 +1,1331 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Quizzer — Faculty</title>
+<script src="/static/socket.io.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #0f1117; --surface: #1a1d27; --surface2: #222537; --border: #2d3148;
+    --accent: #6c63ff; --accent-h: #5a52e0;
+    --green: #22c55e; --green-bg: #0d2818;
+    --red: #ef4444; --yellow: #f59e0b;
+    --text: #e2e8f0; --muted: #8892a4;
+    --radius: 10px;
+  }
+  body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', system-ui, sans-serif; min-height: 100vh; }
+
+  /* ---- Topbar ---- */
+  .topbar { background: var(--surface); border-bottom: 1px solid var(--border); padding: .75rem 1.5rem; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 100; }
+  .brand { font-size: 1.1rem; font-weight: 700; color: var(--accent); }
+  .conn-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); display: inline-block; margin-right: 4px; }
+  .conn-dot.off { background: var(--red); }
+  a.logout { color: var(--muted); text-decoration: none; font-size: .85rem; }
+  a.logout:hover { color: var(--red); }
+
+  /* ---- Step tabs ---- */
+  .step-nav { display: flex; gap: 0; border-bottom: 1px solid var(--border); background: var(--surface); position: sticky; top: 53px; z-index: 99; }
+  .step-tab { flex: 1; text-align: center; padding: .75rem 1rem; font-size: .82rem; font-weight: 600; color: var(--muted); cursor: pointer; border-bottom: 3px solid transparent; transition: color .15s, border-color .15s; user-select: none; }
+  .step-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .step-tab .step-num { display: inline-block; width: 20px; height: 20px; border-radius: 50%; background: var(--border); color: var(--muted); font-size: .7rem; font-weight: 700; line-height: 20px; margin-right: 6px; }
+  .step-tab.active .step-num { background: var(--accent); color: #fff; }
+  .step-tab.done .step-num { background: var(--green); color: #000; }
+  .step-tab.done { color: var(--green); }
+
+  /* ---- Layout ---- */
+  main { max-width: 1000px; margin: 0 auto; padding: 1.5rem; }
+  .panel { display: none; }
+  .panel.active { display: block; }
+
+  /* ---- Cards ---- */
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 1.5rem; margin-bottom: 1.25rem; }
+  .card-title { font-size: 1rem; font-weight: 600; margin-bottom: 1rem; }
+  .card-sub { color: var(--muted); font-size: .875rem; margin-bottom: 1.25rem; }
+
+  /* ---- Forms ---- */
+  .form-row { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 1rem; margin-bottom: 1rem; }
+  .form-group { display: flex; flex-direction: column; gap: .35rem; }
+  .form-group.full { grid-column: 1/-1; }
+  .form-group label { font-size: .72rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+  input[type="text"], input[type="number"], select, textarea {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+    padding: .6rem .85rem; color: var(--text); font-size: .9rem; outline: none; font-family: inherit; width: 100%; transition: border-color .2s;
+  }
+  input:focus, select:focus, textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(108,99,255,.12); }
+  textarea { resize: vertical; min-height: 58px; }
+
+  /* ---- Buttons ---- */
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: .4rem; padding: .6rem 1.2rem; border-radius: 8px; font-size: .9rem; font-weight: 600; cursor: pointer; border: none; transition: background .15s, transform .1s, opacity .15s; white-space: nowrap; }
+  .btn:active { transform: scale(.97); }
+  .btn:disabled { opacity: .45; cursor: not-allowed; transform: none; }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-primary:hover:not(:disabled) { background: var(--accent-h); }
+  .btn-success { background: var(--green); color: #000; }
+  .btn-success:hover:not(:disabled) { background: #16a34a; }
+  .btn-danger { background: var(--red); color: #fff; }
+  .btn-ghost { background: transparent; border: 1px solid var(--border); color: var(--muted); }
+  .btn-ghost:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+  .btn-sm { padding: .35rem .75rem; font-size: .8rem; }
+  .btn-row { display: flex; flex-wrap: wrap; gap: .75rem; margin-top: 1rem; }
+
+  .spinner { display: inline-block; width: 15px; height: 15px; border: 2px solid rgba(255,255,255,.3); border-top-color: #fff; border-radius: 50%; animation: spin .7s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ---- Question bank list ---- */
+  .q-list { display: flex; flex-direction: column; gap: .65rem; }
+  .q-card { background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius); padding: .9rem 1rem; }
+  .q-card-top { display: flex; align-items: flex-start; gap: .65rem; }
+  .q-num { background: var(--accent); color: #fff; width: 22px; height: 22px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: .68rem; font-weight: 700; flex-shrink: 0; margin-top: 2px; }
+  .q-type-tag { font-size: .68rem; font-weight: 700; padding: 2px 7px; border-radius: 999px; text-transform: uppercase; flex-shrink: 0; margin-top: 2px; }
+  .q-type-tag.mcq { background: rgba(108,99,255,.2); color: var(--accent); }
+  .q-type-tag.truefalse { background: rgba(34,197,94,.15); color: var(--green); }
+  .q-actions { margin-left: auto; display: flex; gap: .4rem; flex-shrink: 0; }
+  .q-body { padding-left: 1.8rem; margin-top: .3rem; }
+  .q-text { font-size: .88rem; line-height: 1.45; margin-bottom: .4rem; }
+  .q-image-preview { margin: .4rem 0; border-radius: 8px; overflow: hidden; border: 1px solid var(--border); max-width: 300px; }
+  .q-image-preview img { max-width: 100%; max-height: 160px; object-fit: contain; display: block; }
+  .q-image-preview-bar { display: flex; align-items: center; gap: .5rem; padding: .3rem .6rem; background: var(--bg); font-size: .75rem; color: var(--muted); }
+  .opt-row { font-size: .8rem; margin-bottom: .18rem; }
+  .opt-row.correct-opt { color: var(--green); font-weight: 600; }
+  .time-tag { display: inline-flex; align-items: center; gap: .3rem; font-size: .75rem; color: var(--muted); margin-top: .3rem; }
+  .q-edit-form { display: none; flex-direction: column; gap: .7rem; margin-top: .75rem; padding-top: .75rem; border-top: 1px solid var(--border); }
+  .q-edit-form.open { display: flex; }
+  .opts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: .45rem; }
+  .opt-inp { display: flex; align-items: center; gap: .4rem; }
+  .opt-lbl { width: 18px; font-size: .78rem; font-weight: 700; color: var(--muted); flex-shrink: 0; text-align: center; }
+
+  /* ---- Lobby ---- */
+  .big-num { font-size: 3.5rem; font-weight: 800; color: var(--accent); line-height: 1; }
+  .big-lbl { font-size: .875rem; color: var(--muted); margin-bottom: 1.5rem; }
+  .s-list { display: flex; flex-direction: column; gap: .4rem; max-height: 280px; overflow-y: auto; }
+  .s-chip { display: flex; align-items: center; gap: .55rem; padding: .45rem .7rem; background: var(--surface2); border-radius: 8px; font-size: .875rem; animation: fadeIn .25s ease; }
+  @keyframes fadeIn { from{opacity:0;transform:translateY(-3px)} to{opacity:1;transform:none} }
+  .s-av { width: 26px; height: 26px; border-radius: 50%; background: var(--accent); display: flex; align-items: center; justify-content: center; font-size: .72rem; font-weight: 700; color: #fff; flex-shrink: 0; }
+  .s-roll { color: var(--muted); font-size: .78rem; margin-left: auto; }
+
+  /* ---- Progress ---- */
+  .info-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px,1fr)); gap: 1rem; margin-bottom: 1rem; }
+  .info-box { background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem; text-align: center; }
+  .info-val { font-size: 1.8rem; font-weight: 800; }
+  .info-lbl { font-size: .72rem; color: var(--muted); text-transform: uppercase; margin-top: .2rem; }
+  .countdown { font-size: 2.2rem; font-weight: 800; font-variant-numeric: tabular-nums; color: var(--yellow); }
+  .countdown.urgent { color: var(--red); }
+  .prog-table { width: 100%; border-collapse: collapse; font-size: .87rem; }
+  .prog-table th { text-align: left; padding: .55rem .85rem; color: var(--muted); font-size: .7rem; text-transform: uppercase; border-bottom: 1px solid var(--border); font-weight: 600; }
+  .prog-table td { padding: .6rem .85rem; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  .prog-table tr:hover td { background: var(--surface2); }
+  .prog-bar-wrap { display: flex; align-items: center; gap: .5rem; }
+  .prog-bar { flex: 1; height: 7px; background: var(--border); border-radius: 4px; overflow: hidden; min-width: 70px; }
+  .prog-bar-fill { height: 100%; background: var(--accent); border-radius: 4px; transition: width .4s; }
+  .done-tag { font-size: .72rem; font-weight: 700; color: var(--green); background: rgba(34,197,94,.12); padding: 2px 7px; border-radius: 999px; }
+
+  /* ---- Results ---- */
+  .results-table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+  .results-table th { text-align: left; padding: .65rem 1rem; color: var(--muted); font-size: .7rem; text-transform: uppercase; border-bottom: 1px solid var(--border); font-weight: 600; }
+  .results-table td { padding: .65rem 1rem; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  .results-table tr:hover td { background: var(--surface2); }
+  .score-bar-wrap { display: flex; align-items: center; gap: .65rem; }
+  .score-bar { flex: 1; height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; min-width: 70px; }
+  .score-bar-fill { height: 100%; border-radius: 3px; }
+
+  /* ---- Toast ---- */
+  #toast { position: fixed; top: 1rem; right: 1rem; max-width: 300px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: .8rem 1rem; font-size: .875rem; box-shadow: 0 4px 20px rgba(0,0,0,.4); z-index: 500; transform: translateX(120%); transition: transform .28s cubic-bezier(.34,1.56,.64,1); }
+  #toast.show { transform: translateX(0); }
+
+  /* ---- Modal ---- */
+  .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,.7); z-index: 200; display: none; align-items: center; justify-content: center; padding: 1rem; }
+  .modal-bg.open { display: flex; }
+  .modal { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 1.75rem; width: 100%; max-width: 540px; max-height: 90vh; overflow-y: auto; }
+  .modal-hdr { font-size: 1.05rem; font-weight: 700; margin-bottom: 1.1rem; display: flex; justify-content: space-between; align-items: center; }
+  .modal-x { background: none; border: none; color: var(--muted); font-size: 1.2rem; cursor: pointer; }
+
+  /* ---- Hotspot bar ---- */
+  .hs-bar { background: var(--surface); border-bottom: 1px solid var(--border); padding: .55rem 1.5rem; display: flex; align-items: center; gap: .85rem; flex-wrap: wrap; font-size: .83rem; position: sticky; top: 101px; z-index: 98; }
+  .hs-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--red); display: inline-block; flex-shrink: 0; }
+  .hs-dot.on { background: var(--green); }
+  .hs-badge { background: rgba(108,99,255,.15); color: var(--accent); font-weight: 700; padding: 2px 10px; border-radius: 999px; font-size: .75rem; }
+
+  ::-webkit-scrollbar { width: 5px; } ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+  @media (max-width: 640px) { main { padding: 1rem; } .form-row { grid-template-columns: 1fr; } .opts-grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand">Quizzer — Faculty</div>
+  <div style="display:flex;align-items:center;gap:1rem">
+    <span><span class="conn-dot off" id="cdot"></span><span id="ctext" style="font-size:.8rem;color:var(--muted)">Connecting…</span></span>
+    <a href="/faculty/logout" class="logout">Logout</a>
+  </div>
+</div>
+
+<!-- Step navigation -->
+<div class="step-nav">
+  <div class="step-tab active" id="tab-bank" onclick="goTab('bank')">
+    <span class="step-num" id="snum-bank">1</span>Question Bank
+  </div>
+  <div class="step-tab" id="tab-lobby" onclick="goTab('lobby')">
+    <span class="step-num" id="snum-lobby">2</span>Lobby
+  </div>
+  <div class="step-tab" id="tab-progress" onclick="goTab('progress')">
+    <span class="step-num" id="snum-progress">3</span>Live Progress
+  </div>
+  <div class="step-tab" id="tab-results" onclick="goTab('results')">
+    <span class="step-num" id="snum-results">4</span>Results
+  </div>
+</div>
+
+<!-- Hotspot status bar (always visible) -->
+<div class="hs-bar" id="hs-bar">
+  <span class="hs-dot" id="hs-dot"></span>
+  <span id="hs-label" style="color:var(--muted)">Hotspot: checking…</span>
+  <span class="hs-badge" id="hs-ssid-badge" style="display:none"></span>
+  <span id="hs-url-hint" style="display:none;font-size:.75rem;color:var(--muted)">
+    Students: open browser → <strong style="color:var(--text)">any website</strong> → quiz opens automatically
+    &nbsp;|&nbsp; manual: <code style="color:var(--accent)" id="hs-url-text"></code>
+  </span>
+  <span style="flex:1"></span>
+  <button class="btn btn-ghost btn-sm" id="btn-hs-config" onclick="openHotspotModal()">Configure Hotspot</button>
+  <button class="btn btn-danger btn-sm" id="btn-hs-stop" style="display:none" onclick="stopHotspot()">Stop Hotspot</button>
+</div>
+
+<!-- Hotspot Config Modal -->
+<div class="modal-bg" id="hs-modal">
+  <div class="modal" style="max-width:460px">
+    <div class="modal-hdr">WiFi Hotspot <button class="modal-x" onclick="closeHotspotModal()">✕</button></div>
+
+    <div class="form-group" style="margin-bottom:.9rem">
+      <label>Network Name (SSID)</label>
+      <input type="text" id="hs-ssid" value="ClassroomQuiz" maxlength="32" placeholder="e.g. Room201-Quiz" />
+    </div>
+    <div class="form-group" style="margin-bottom:.9rem">
+      <label>Password (min 8 chars)</label>
+      <input type="text" id="hs-pass" value="quiz12345" maxlength="63" />
+    </div>
+    <div class="form-group" style="margin-bottom:.9rem">
+      <label>WiFi Interface</label>
+      <select id="hs-iface"><option value="wlan0">wlan0</option></select>
+    </div>
+
+    <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:.75rem 1rem;font-size:.8rem;color:var(--muted);margin-bottom:.65rem;line-height:1.55">
+      Students connected to this hotspot will reach <strong style="color:var(--text)">only the quiz page</strong> — all other internet access is blocked.
+    </div>
+    <div style="background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.35);border-radius:8px;padding:.75rem 1rem;font-size:.8rem;color:var(--yellow);margin-bottom:1rem;line-height:1.55">
+      <strong>WiFi will be used for the hotspot.</strong> If your internet connection is via WiFi, it will be disconnected while the hotspot is active.<br>
+      <span style="opacity:.85">Plug in an <strong>ethernet cable</strong> before starting if you need internet access during the quiz.</span>
+    </div>
+
+    <div id="hs-modal-err" style="color:var(--red);font-size:.82rem;margin-bottom:.6rem;display:none"></div>
+
+    <div class="btn-row" style="margin-top:0">
+      <button class="btn btn-success" id="btn-hs-start" onclick="startHotspot()">Deploy Hotspot</button>
+      <button class="btn btn-ghost" onclick="closeHotspotModal()">Cancel</button>
+    </div>
+    <div id="hs-modal-log" style="font-size:.75rem;color:var(--muted);margin-top:.75rem;white-space:pre-wrap;display:none;max-height:120px;overflow-y:auto;background:var(--bg);padding:.5rem;border-radius:6px"></div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<main>
+
+<!-- ====== STEP 1: QUESTION BANK ====== -->
+<div class="panel active" id="panel-bank">
+
+  <div class="card">
+    <div class="card-title">Build Question Bank</div>
+    <div class="card-sub">Generate questions with AI, then edit or add more. Students will each get all questions in a different random order.</div>
+
+    <div class="form-row">
+      <div class="form-group full">
+        <label>Topic</label>
+        <input type="text" id="topic-inp" placeholder="e.g. Newton's Laws, SQL Joins, French Revolution" />
+      </div>
+      <div class="form-group">
+        <label>Number of questions</label>
+        <input type="number" id="count-inp" value="15" min="3" max="50" />
+      </div>
+      <div class="form-group">
+        <label>Difficulty</label>
+        <select id="diff-sel">
+          <option value="Easy">Easy</option>
+          <option value="Medium" selected>Medium</option>
+          <option value="Hard">Hard</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Ollama Model</label>
+        <select id="model-sel"><option value="">Loading…</option></select>
+      </div>
+    </div>
+
+    <div class="btn-row" style="margin-top:0">
+      <button class="btn btn-primary" id="btn-gen" onclick="handleGenerate()">Generate Questions</button>
+      <button class="btn btn-ghost btn-sm" id="btn-add-q" onclick="openAddModal()" style="display:none">+ Add Manually</button>
+    </div>
+    <div id="gen-status" style="margin-top:.7rem;color:var(--muted);font-size:.85rem;display:none"></div>
+  </div>
+
+  <!-- Bank list (shown after generation or resume) -->
+  <div id="bank-section" style="display:none">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.65rem;flex-wrap:wrap;gap:.5rem">
+      <div>
+        <span style="font-weight:600" id="bank-title">Question Bank</span>
+        <span style="color:var(--muted);font-size:.82rem;margin-left:.5rem" id="bank-count"></span>
+      </div>
+      <div style="display:flex;gap:.5rem">
+        <button class="btn btn-ghost btn-sm" onclick="openAddModal()">+ Add Manually</button>
+        <button class="btn btn-success btn-sm" id="btn-proceed" onclick="handleProceedToLobby()">
+          Proceed to Lobby →
+        </button>
+      </div>
+    </div>
+    <div class="q-list" id="q-list"></div>
+  </div>
+
+  <!-- AI Assistant panel (shown once a session exists) -->
+  <div id="ai-chat-section" style="display:none;margin-top:1.5rem">
+    <div class="card">
+      <div class="card-title" style="margin-bottom:.5rem">
+        AI Question Assistant
+        <span style="font-size:.72rem;font-weight:400;color:var(--muted);margin-left:.5rem">Ask the AI to add or change questions</span>
+      </div>
+
+      <div style="font-size:.8rem;color:var(--muted);margin-bottom:.75rem">
+        Examples: &ldquo;Add 5 harder questions about osmosis&rdquo; &bull; &ldquo;Give me 3 true/false questions&rdquo; &bull; &ldquo;Add questions testing calculations&rdquo;
+      </div>
+
+      <div style="display:flex;gap:.5rem">
+        <input type="text" id="ai-chat-inp" placeholder="Ask the AI to add questions…"
+               style="flex:1" onkeydown="if(event.key==='Enter') sendAiChat()" />
+        <button class="btn btn-primary" id="btn-ai-send" onclick="sendAiChat()" style="flex-shrink:0">Ask AI</button>
+      </div>
+
+      <!-- Suggestions area -->
+      <div id="ai-suggestions" style="margin-top:1rem"></div>
+    </div>
+  </div>
+
+</div>
+
+
+<!-- ====== STEP 2: LOBBY ====== -->
+<div class="panel" id="panel-lobby">
+
+  <div class="card">
+    <div class="card-title">Student Waiting Room
+      <span style="font-size:.7rem;font-weight:700;padding:2px 8px;border-radius:999px;background:rgba(245,158,11,.15);color:var(--yellow);margin-left:.5rem;vertical-align:middle">Open</span>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1.25rem">
+      <div>
+        <div style="font-size:.72rem;color:var(--muted);text-transform:uppercase;margin-bottom:.3rem">Topic</div>
+        <div style="font-weight:600" id="lobby-topic"></div>
+      </div>
+      <div>
+        <div style="font-size:.72rem;color:var(--muted);text-transform:uppercase;margin-bottom:.3rem">Questions</div>
+        <div style="font-weight:600" id="lobby-qcount"></div>
+      </div>
+      <div>
+        <div style="font-size:.72rem;color:var(--muted);text-transform:uppercase;margin-bottom:.3rem">Time Limit</div>
+        <div style="display:flex;align-items:center;gap:.5rem">
+          <input type="number" id="timelimit-inp" value="20" min="2" max="180" style="width:65px;padding:.35rem .5rem;font-size:.9rem" />
+          <span style="color:var(--muted);font-size:.85rem">minutes</span>
+        </div>
+      </div>
+      <div>
+        <div style="font-size:.72rem;color:var(--muted);text-transform:uppercase;margin-bottom:.3rem">Students Connected</div>
+        <div class="big-num" id="s-count" style="font-size:2rem">0</div>
+      </div>
+    </div>
+
+    <div class="s-list" id="s-list"></div>
+  </div>
+
+  <div class="btn-row">
+    <button class="btn btn-ghost btn-sm" onclick="goTab('bank')">← Edit Question Bank</button>
+    <button class="btn btn-success" id="btn-start" onclick="handleStartQuiz()" disabled>
+      Start Quiz (waiting for students…)
+    </button>
+  </div>
+
+</div>
+
+
+<!-- ====== STEP 3: LIVE PROGRESS ====== -->
+<div class="panel" id="panel-progress">
+
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:1rem;flex-wrap:wrap;gap:.75rem">
+    <div>
+      <div style="font-size:1rem;font-weight:700">Quiz in Progress</div>
+      <div style="color:var(--muted);font-size:.83rem" id="prog-meta"></div>
+    </div>
+    <div style="text-align:right">
+      <div style="font-size:.68rem;color:var(--muted);text-transform:uppercase;margin-bottom:.15rem">Time Remaining</div>
+      <div class="countdown" id="quiz-countdown">--:--</div>
+    </div>
+  </div>
+
+  <!-- Timer extension controls -->
+  <div class="card" style="padding:1rem 1.25rem;margin-bottom:1rem">
+    <div style="display:flex;align-items:center;flex-wrap:wrap;gap:.65rem">
+      <span style="font-size:.82rem;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em">Extend Timer:</span>
+      <button class="btn btn-ghost btn-sm" onclick="extendTimer(5)">+5 min</button>
+      <button class="btn btn-ghost btn-sm" onclick="extendTimer(10)">+10 min</button>
+      <button class="btn btn-ghost btn-sm" onclick="extendTimer(15)">+15 min</button>
+      <div style="display:flex;align-items:center;gap:.4rem;margin-left:.25rem">
+        <input type="number" id="custom-extend" value="5" min="1" max="60"
+               style="width:60px;padding:.3rem .5rem;font-size:.85rem;text-align:center" />
+        <span style="color:var(--muted);font-size:.82rem">min</span>
+        <button class="btn btn-primary btn-sm" onclick="extendTimer(parseInt(document.getElementById('custom-extend').value)||5)">Add</button>
+      </div>
+    </div>
+    <div id="extend-msg" style="font-size:.78rem;color:var(--green);margin-top:.4rem;display:none"></div>
+  </div>
+
+  <div class="info-grid">
+    <div class="info-box"><div class="info-val" id="pi-total">0</div><div class="info-lbl">Students</div></div>
+    <div class="info-box"><div class="info-val" style="color:var(--green)" id="pi-done">0</div><div class="info-lbl">Finished</div></div>
+    <div class="info-box"><div class="info-val" style="color:var(--yellow)" id="pi-inprog">0</div><div class="info-lbl">In Progress</div></div>
+    <div class="info-box"><div class="info-val" id="pi-qs">0</div><div class="info-lbl">Questions Each</div></div>
+  </div>
+
+  <div class="card" style="padding:0;overflow:hidden">
+    <div style="padding:.8rem 1.1rem;border-bottom:1px solid var(--border);font-size:.875rem;font-weight:600">Live Progress</div>
+    <div style="overflow-x:auto">
+      <table class="prog-table">
+        <thead><tr>
+          <th>Student</th><th>Roll No</th><th>Progress</th><th>Correct / Answered</th><th>Status</th>
+        </tr></thead>
+        <tbody id="prog-tbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="btn-row">
+    <button class="btn btn-danger" onclick="if(confirm('End the quiz for all students now?')) handleEndQuiz()">End Quiz Now</button>
+  </div>
+
+</div>
+
+
+<!-- ====== STEP 4: RESULTS ====== -->
+<div class="panel" id="panel-results">
+  <div class="card">
+    <div class="card-title">Quiz Results</div>
+    <div style="color:var(--muted);font-size:.85rem;margin-bottom:1rem" id="results-meta"></div>
+    <div style="overflow-x:auto">
+      <table class="results-table">
+        <thead><tr><th>Rank</th><th>Student</th><th>Roll No</th><th>Score</th><th>Percentage</th></tr></thead>
+        <tbody id="results-tbody"></tbody>
+      </table>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-primary" onclick="downloadCSV()">Download CSV</button>
+      <button class="btn btn-ghost" onclick="location.reload()">New Quiz</button>
+    </div>
+  </div>
+</div>
+
+</main>
+
+
+<!-- Add Question Modal -->
+<div class="modal-bg" id="add-modal">
+  <div class="modal">
+    <div class="modal-hdr">Add Question Manually <button class="modal-x" onclick="closeAddModal()">✕</button></div>
+    <div class="form-group" style="margin-bottom:.9rem">
+      <label>Question Text</label>
+      <textarea id="mq-text" rows="3" placeholder="Enter the question…"></textarea>
+    </div>
+    <div class="form-group" style="margin-bottom:.9rem">
+      <label>Type</label>
+      <select id="mq-type" onchange="updateModalType()">
+        <option value="mcq">Multiple Choice (MCQ)</option>
+        <option value="truefalse">True / False</option>
+      </select>
+    </div>
+    <div id="mq-mcq-fields">
+      <div style="font-size:.72rem;color:var(--muted);text-transform:uppercase;margin-bottom:.45rem">Options</div>
+      <div style="display:flex;flex-direction:column;gap:.45rem">
+        <div class="opt-inp"><span class="opt-lbl">A</span><input type="text" id="mq-a" placeholder="Option A" /></div>
+        <div class="opt-inp"><span class="opt-lbl">B</span><input type="text" id="mq-b" placeholder="Option B" /></div>
+        <div class="opt-inp"><span class="opt-lbl">C</span><input type="text" id="mq-c" placeholder="Option C" /></div>
+        <div class="opt-inp"><span class="opt-lbl">D</span><input type="text" id="mq-d" placeholder="Option D" /></div>
+      </div>
+      <div class="form-group" style="margin-top:.7rem">
+        <label>Correct Answer (exact option text)</label>
+        <input type="text" id="mq-correct-mcq" placeholder="Must match one option exactly" />
+      </div>
+    </div>
+    <div id="mq-tf-fields" style="display:none">
+      <div class="form-group">
+        <label>Correct Answer</label>
+        <select id="mq-correct-tf"><option>True</option><option>False</option></select>
+      </div>
+    </div>
+    <div class="form-group" style="margin-top:.7rem">
+      <label>Time Limit for this question (seconds)</label>
+      <input type="number" id="mq-time" value="30" min="10" max="300" />
+    </div>
+    <div class="form-group" style="margin-top:.7rem">
+      <label>Image (optional)</label>
+      <label style="display:inline-flex;align-items:center;gap:.4rem;cursor:pointer;font-size:.82rem;color:var(--muted);padding:.45rem .85rem;border:1px dashed var(--border);border-radius:8px;width:fit-content">
+        📷 Attach image
+        <input type="file" id="mq-image" accept="image/*" style="display:none" onchange="previewModalImage(this)" />
+      </label>
+      <div id="mq-image-preview" style="display:none;margin-top:.5rem;border-radius:8px;overflow:hidden;border:1px solid var(--border);max-width:260px">
+        <img id="mq-image-preview-img" src="" alt="" style="max-width:100%;max-height:140px;object-fit:contain;display:block" />
+        <div style="display:flex;align-items:center;padding:.3rem .6rem;background:var(--bg);font-size:.75rem;color:var(--muted);gap:.5rem">
+          <span id="mq-image-name" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
+          <button class="btn btn-ghost btn-sm" style="padding:2px 7px;font-size:.72rem" onclick="clearModalImage()">Remove</button>
+        </div>
+      </div>
+    </div>
+    <div class="btn-row" style="margin-top:.9rem">
+      <button class="btn btn-primary" onclick="submitAddQuestion()">Add to Bank</button>
+      <button class="btn btn-ghost" onclick="closeAddModal()">Cancel</button>
+    </div>
+  </div>
+</div>
+
+
+<script>
+// ---- State ----
+const INIT = {{ active_session | tojson }};
+let sessionId     = INIT ? INIT.id : null;
+let questions     = [];
+let totalStudents = 0;
+let progMap       = {};   // student_id → {name, roll_no, answered, assigned, correct, done}
+let resultsData   = [];
+let quizEndAt     = null;
+let countdownTimer = null;
+let pollTimer     = null;
+let socket;
+
+document.addEventListener('DOMContentLoaded', () => {
+  loadModels();
+  loadHotspotStatus();
+  initSocket();
+
+  if (INIT) {
+    if (INIT.status === 'setup') {
+      loadBankFromServer();
+    } else if (INIT.status === 'lobby') {
+      loadBankFromServer().then(() => {
+        openLobbyUI();
+        loadStudentsFromServer();
+      });
+    } else if (INIT.status === 'active') {
+      loadBankFromServer().then(() => {
+        startProgressPolling();
+        activateStep('progress');
+        if (INIT.time_limit_seconds && INIT.started_at) {
+          const elapsed = Math.round((Date.now() - new Date(INIT.started_at + 'Z').getTime()) / 1000);
+          startCountdown(Math.max(0, INIT.time_limit_seconds - elapsed));
+        }
+      });
+    } else if (INIT.status === 'ended') {
+      fetchAndShowResults();
+    }
+  }
+});
+
+// ---- Socket ----
+function initSocket() {
+  socket = io({ transports: ['websocket', 'polling'] });
+  socket.on('connect', () => {
+    setConn(true);
+    if (sessionId) socket.emit('faculty_join', { session_id: sessionId });
+  });
+  socket.on('disconnect', () => setConn(false));
+
+  socket.on('student_joined', ({ name, roll_no, count }) => {
+    totalStudents = count;
+    document.getElementById('s-count').textContent = count;
+    appendStudentChip(name, roll_no);
+    const btn = document.getElementById('btn-start');
+    btn.disabled = false;
+    btn.textContent = `Start Quiz  (${count} student${count !== 1 ? 's' : ''} ready)`;
+    document.getElementById('pi-total').textContent = count;
+  });
+
+  socket.on('student_progress', ({ student_id, answered, assigned, correct, done }) => {
+    progMap[student_id] = { ...progMap[student_id], answered, assigned, correct, done };
+    updateProgRow(student_id);
+    const doneCount = Object.values(progMap).filter(p => p.done).length;
+    document.getElementById('pi-done').textContent = doneCount;
+    document.getElementById('pi-inprog').textContent = Object.keys(progMap).length - doneCount;
+  });
+
+  socket.on('quiz_ended', () => {
+    clearInterval(countdownTimer);
+    clearInterval(pollTimer);
+    fetchAndShowResults();
+  });
+
+  socket.on('timer_extended', ({ extend_by_seconds }) => {
+    // Update faculty's own countdown too (in case another browser tab extended it)
+    if (quizEndAt) quizEndAt += extend_by_seconds * 1000;
+    const mins = Math.round(extend_by_seconds / 60);
+    toast(`Timer extended by ${mins} min for all students.`);
+  });
+}
+
+function setConn(ok) {
+  document.getElementById('cdot').className = 'conn-dot' + (ok ? '' : ' off');
+  document.getElementById('ctext').textContent = ok ? 'Connected' : 'Disconnected';
+}
+
+// ---- Models ----
+async function loadModels() {
+  try {
+    const d = await fetch('/api/models').then(r => r.json());
+    const sel = document.getElementById('model-sel');
+    sel.innerHTML = '';
+    (d.models || []).forEach(m => {
+      const o = document.createElement('option');
+      o.value = o.textContent = m;
+      sel.appendChild(o);
+    });
+    if (!d.models?.length) {
+      sel.innerHTML = '<option value="">No models — check Ollama</option>';
+      toast('Ollama not reachable. Is it running?', 6000);
+    }
+  } catch { document.getElementById('model-sel').innerHTML = '<option value="">Ollama unavailable</option>'; }
+}
+
+// ---- Generate ----
+async function handleGenerate() {
+  const topic = document.getElementById('topic-inp').value.trim();
+  const count = parseInt(document.getElementById('count-inp').value) || 15;
+  const diff  = document.getElementById('diff-sel').value;
+  const model = document.getElementById('model-sel').value;
+
+  if (!topic) { toast('Enter a topic first.'); return; }
+  if (!model) { toast('Select an Ollama model.'); return; }
+
+  const btn = document.getElementById('btn-gen');
+  const sta = document.getElementById('gen-status');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Generating…';
+  sta.style.display = 'block';
+  sta.textContent = `Generating ${count} ${diff.toLowerCase()} questions about "${topic}"…`;
+
+  try {
+    // Create/reset session
+    const sr = await fetch('/api/session/create', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ topic }),
+    });
+    if (!sr.ok) throw new Error(await sr.text());
+    sessionId = (await sr.json()).session_id;
+    socket.emit('faculty_join', { session_id: sessionId });
+
+    const gr = await fetch('/api/questions/generate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: sessionId, topic, count, difficulty: diff, model }),
+    });
+    if (!gr.ok) { const e = await gr.json(); throw new Error(e.error || 'Generation failed'); }
+    questions = (await gr.json()).questions;
+
+    sta.textContent = `✓ ${questions.length} questions saved to bank.`;
+    renderBank();
+    document.getElementById('bank-section').style.display = 'block';
+    document.getElementById('ai-chat-section').style.display = 'block';
+    document.getElementById('btn-add-q').style.display = 'inline-flex';
+    document.getElementById('bank-title').textContent = `Question Bank — ${topic}`;
+    markTabDone('bank');
+  } catch (e) {
+    sta.textContent = 'Error: ' + e.message;
+    toast('Error: ' + e.message, 6000);
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = 'Generate Questions';
+  }
+}
+
+async function loadBankFromServer() {
+  if (!sessionId) return;
+  try {
+    questions = await fetch(`/api/questions/${sessionId}`).then(r => r.json());
+    const topic = INIT?.topic || '';
+    document.getElementById('bank-title').textContent = topic ? `Question Bank — ${topic}` : 'Question Bank';
+    renderBank();
+    document.getElementById('bank-section').style.display = 'block';
+    document.getElementById('ai-chat-section').style.display = 'block';
+    document.getElementById('btn-add-q').style.display = 'inline-flex';
+    if (questions.length) markTabDone('bank');
+    // Populate lobby topic
+    document.getElementById('lobby-topic').textContent = topic;
+    document.getElementById('lobby-qcount').textContent = `${questions.length} questions (all assigned to every student)`;
+    document.getElementById('pi-qs').textContent = questions.length;
+  } catch(e) { console.error(e); }
+}
+
+// ---- Render bank ----
+function renderBank() {
+  const list = document.getElementById('q-list');
+  list.innerHTML = '';
+  questions.forEach((q, i) => list.appendChild(buildQCard(q, i)));
+  document.getElementById('bank-count').textContent = `${questions.length} question${questions.length !== 1 ? 's' : ''} · each student answers all of them in a unique random order`;
+}
+
+function buildQCard(q, idx) {
+  const labels = ['A','B','C','D'];
+  const div = document.createElement('div');
+  div.className = 'q-card';
+  div.id = `qc-${q.id}`;
+
+  const imgHtml = q.image_url
+    ? `<div class="q-image-preview">
+         <img src="${escHtml(q.image_url)}" alt="question image" />
+         <div class="q-image-preview-bar">
+           <span style="flex:1">Image attached</span>
+           <button class="btn btn-ghost btn-sm" style="padding:2px 7px;font-size:.72rem" onclick="removeImg(${q.id})">Remove</button>
+         </div>
+       </div>`
+    : `<label style="display:inline-flex;align-items:center;gap:.3rem;cursor:pointer;font-size:.75rem;color:var(--muted);padding:3px 7px;border:1px dashed var(--border);border-radius:6px;margin-top:.3rem">
+         📷 Add image
+         <input type="file" accept="image/*" style="display:none" onchange="uploadImg(${q.id},this)">
+       </label>`;
+
+  const optRows = q.type === 'mcq'
+    ? (q.options||[]).map((o,i) =>
+        `<div class="opt-row${o===q.correct_answer?' correct-opt':''}"><span style="font-weight:700;margin-right:.3rem">${labels[i]||i+1}.</span>${escHtml(o)}${o===q.correct_answer?' ✓':''}</div>`
+      ).join('')
+    : `<div class="opt-row correct-opt">Answer: ${escHtml(q.correct_answer)}</div>`;
+
+  div.innerHTML = `
+    <div class="q-card-top">
+      <div class="q-num">${idx+1}</div>
+      <span class="q-type-tag ${q.type}">${q.type==='mcq'?'MCQ':'T/F'}</span>
+      <div class="q-actions">
+        <button class="btn btn-ghost btn-sm" onclick="toggleEdit(${q.id})">Edit</button>
+      </div>
+    </div>
+    <div class="q-body">
+      <div class="q-text">${escHtml(q.text)}</div>
+      ${imgHtml}
+      ${optRows}
+      <div class="time-tag">⏱ ${q.suggested_time}s per student</div>
+
+      <!-- Edit form -->
+      <div class="q-edit-form" id="qef-${q.id}">
+        <div class="form-group">
+          <label>Question Text</label>
+          <textarea id="et-${q.id}" rows="2">${escHtml(q.text)}</textarea>
+        </div>
+        ${q.type==='mcq' ? `
+          <div class="opts-grid">
+            ${(q.options||[]).map((o,i)=>`<div class="opt-inp"><span class="opt-lbl">${labels[i]}</span><input type="text" id="eo-${q.id}-${i}" value="${escHtml(o)}" /></div>`).join('')}
+          </div>
+          <div class="form-group">
+            <label>Correct Answer (exact text)</label>
+            <input type="text" id="ec-${q.id}" value="${escHtml(q.correct_answer)}" />
+          </div>
+        ` : `<div class="form-group"><label>Correct Answer</label>
+          <select id="ec-${q.id}">
+            <option${q.correct_answer==='True'?' selected':''}>True</option>
+            <option${q.correct_answer==='False'?' selected':''}>False</option>
+          </select></div>`}
+        <div class="form-group">
+          <label>Time limit for this question (sec)</label>
+          <input type="number" id="et2-${q.id}" value="${q.suggested_time}" min="10" max="300" style="width:100px" />
+        </div>
+        <div class="btn-row" style="margin-top:0">
+          <button class="btn btn-primary btn-sm" onclick="saveEdit(${q.id},'${q.type}')">Save</button>
+          <button class="btn btn-ghost btn-sm" onclick="toggleEdit(${q.id})">Cancel</button>
+        </div>
+      </div>
+    </div>`;
+  return div;
+}
+
+function toggleEdit(id) { document.getElementById(`qef-${id}`).classList.toggle('open'); }
+
+async function saveEdit(qId, qType) {
+  const text    = document.getElementById(`et-${qId}`).value.trim();
+  const correct = document.getElementById(`ec-${qId}`).value.trim();
+  const time    = parseInt(document.getElementById(`et2-${qId}`).value);
+  const opts    = qType==='mcq' ? [0,1,2,3].map(i=>(document.getElementById(`eo-${qId}-${i}`)?.value||'').trim()) : ['True','False'];
+  try {
+    const r = await fetch(`/api/questions/${qId}`, {
+      method:'PUT', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ text, type:qType, options:opts, correct_answer:correct, suggested_time:time }),
+    });
+    if (!r.ok) throw new Error('Save failed');
+    const upd = await r.json();
+    const idx = questions.findIndex(q=>q.id===qId);
+    if (idx!==-1) { questions[idx]=upd; document.getElementById(`qc-${qId}`).replaceWith(buildQCard(upd,idx)); }
+    toast('Question saved.');
+  } catch(e) { toast('Save failed: '+e.message); }
+}
+
+async function uploadImg(qId, inp) {
+  if (!inp.files[0]) return;
+  const fd = new FormData();
+  fd.append('image', inp.files[0]);
+  try {
+    const r = await fetch(`/api/questions/${qId}/upload-image`, { method:'POST', body:fd });
+    if (!r.ok) { const e=await r.json(); throw new Error(e.error||'Upload failed'); }
+    const { image_url } = await r.json();
+    const idx = questions.findIndex(q=>q.id===qId);
+    if (idx!==-1) { questions[idx].image_url=image_url; document.getElementById(`qc-${qId}`).replaceWith(buildQCard(questions[idx],idx)); }
+    toast('Image attached.');
+  } catch(e) { toast('Upload error: '+e.message); }
+}
+
+async function removeImg(qId) {
+  try {
+    await fetch(`/api/questions/${qId}/remove-image`, { method:'DELETE' });
+    const idx = questions.findIndex(q=>q.id===qId);
+    if (idx!==-1) { questions[idx].image_url=null; document.getElementById(`qc-${qId}`).replaceWith(buildQCard(questions[idx],idx)); }
+    toast('Image removed.');
+  } catch(e) { toast('Error: '+e.message); }
+}
+
+// ---- Proceed to lobby ----
+async function handleProceedToLobby() {
+  if (!sessionId || questions.length===0) { toast('Generate questions first.'); return; }
+  try {
+    await fetch(`/api/session/${sessionId}/open-lobby`, { method:'POST' });
+    openLobbyUI();
+    toast('Lobby open — students can now connect.');
+  } catch(e) { toast('Error: '+e.message); }
+}
+
+function openLobbyUI() {
+  const topic = INIT?.topic || document.getElementById('topic-inp').value.trim() || '';
+  document.getElementById('lobby-topic').textContent = topic;
+  document.getElementById('lobby-qcount').textContent = `${questions.length} questions (all assigned to every student)`;
+  document.getElementById('pi-qs').textContent = questions.length;
+  activateStep('lobby');
+  markTabDone('bank');
+}
+
+async function loadStudentsFromServer() {
+  if (!sessionId) return;
+  try {
+    const students = await fetch(`/api/students/${sessionId}`).then(r=>r.json());
+    totalStudents = students.length;
+    document.getElementById('s-count').textContent = totalStudents;
+    document.getElementById('pi-total').textContent = totalStudents;
+    students.forEach(s => appendStudentChip(s.name, s.roll_no));
+    if (totalStudents > 0) {
+      const btn = document.getElementById('btn-start');
+      btn.disabled = false;
+      btn.textContent = `Start Quiz  (${totalStudents} student${totalStudents!==1?'s':''} ready)`;
+    }
+  } catch(e) { console.error(e); }
+}
+
+// ---- Start quiz ----
+function handleStartQuiz() {
+  if (questions.length===0) { toast('No questions in bank.'); return; }
+  const timeLimitMin = parseInt(document.getElementById('timelimit-inp').value)||20;
+  const timeLimitSec = timeLimitMin * 60;
+
+  document.getElementById('prog-meta').textContent =
+    `${INIT?.topic||''} · ${questions.length} questions · ${timeLimitMin} min`;
+  document.getElementById('pi-total').textContent = totalStudents;
+  document.getElementById('pi-done').textContent = '0';
+  document.getElementById('pi-inprog').textContent = totalStudents;
+  document.getElementById('pi-qs').textContent = questions.length;
+
+  socket.emit('start_quiz', { session_id: sessionId, time_limit_seconds: timeLimitSec });
+
+  startCountdown(timeLimitSec);
+  startProgressPolling();
+  activateStep('progress');
+  markTabDone('lobby');
+  toast(`Quiz started! ${totalStudents} students, ${questions.length} questions each.`);
+}
+
+// ---- Countdown ----
+function startCountdown(totalSec) {
+  quizEndAt = Date.now() + totalSec * 1000;
+  clearInterval(countdownTimer);
+  const el = document.getElementById('quiz-countdown');
+  countdownTimer = setInterval(() => {
+    const rem = Math.max(0, Math.round((quizEndAt - Date.now()) / 1000));
+    el.textContent = `${String(Math.floor(rem/60)).padStart(2,'0')}:${String(rem%60).padStart(2,'0')}`;
+    el.className = 'countdown' + (rem < 120 ? ' urgent' : '');
+    if (rem===0) clearInterval(countdownTimer);
+  }, 1000);
+}
+
+// ---- Progress polling ----
+function startProgressPolling() {
+  clearInterval(pollTimer);
+  fetchProgress();
+  pollTimer = setInterval(fetchProgress, 5000);
+}
+
+async function fetchProgress() {
+  if (!sessionId) return;
+  try {
+    const prog = await fetch(`/api/session/${sessionId}/progress`).then(r=>r.json());
+    prog.forEach(p => {
+      progMap[p.student_id] = p;
+      updateProgRow(p.student_id);
+    });
+    const done = prog.filter(p=>p.done).length;
+    document.getElementById('pi-done').textContent = done;
+    document.getElementById('pi-inprog').textContent = prog.length - done;
+    document.getElementById('pi-total').textContent = prog.length;
+  } catch {}
+}
+
+function updateProgRow(sid) {
+  const p = progMap[sid];
+  if (!p?.name) return;
+  let row = document.getElementById(`pr-${sid}`);
+  if (!row) {
+    row = document.createElement('tr');
+    row.id = `pr-${sid}`;
+    document.getElementById('prog-tbody').appendChild(row);
+  }
+  const pct = p.assigned > 0 ? Math.round(p.answered/p.assigned*100) : 0;
+  row.innerHTML = `
+    <td><strong>${escHtml(p.name)}</strong></td>
+    <td style="color:var(--muted)">${escHtml(p.roll_no||'')}</td>
+    <td><div class="prog-bar-wrap">
+      <div class="prog-bar"><div class="prog-bar-fill" style="width:${pct}%"></div></div>
+      <span style="font-size:.78rem;color:var(--muted);white-space:nowrap">${p.answered||0}/${p.assigned||'?'}</span>
+    </div></td>
+    <td style="font-weight:600">${p.correct||0} / ${p.answered||0}</td>
+    <td>${p.done ? '<span class="done-tag">Done</span>' : `<span style="font-size:.78rem;color:var(--muted)">${pct}%</span>`}</td>`;
+}
+
+// ---- End quiz ----
+function handleEndQuiz() {
+  clearInterval(countdownTimer);
+  clearInterval(pollTimer);
+  socket.emit('end_quiz', { session_id: sessionId });
+}
+
+// ---- Timer extension ----
+function extendTimer(minutes) {
+  const secs = minutes * 60;
+  socket.emit('extend_timer', { session_id: sessionId, extend_by_seconds: secs });
+  // Update local countdown immediately
+  if (typeof quizEndAt !== 'undefined' && quizEndAt) {
+    quizEndAt += secs * 1000;
+  }
+  const msg = document.getElementById('extend-msg');
+  msg.textContent = `+${minutes} min sent to all students.`;
+  msg.style.display = 'block';
+  setTimeout(() => { msg.style.display = 'none'; }, 3000);
+  toast(`Timer extended by ${minutes} min.`);
+}
+
+// Listen for timer_extended confirmation from server (in case another tab extended it)
+// Already handled via socket.on('timer_extended') — update quizEndAt
+// (socket listener added in initSocket)
+
+// ---- AI Chat ----
+async function sendAiChat() {
+  const inp = document.getElementById('ai-chat-inp');
+  const message = inp.value.trim();
+  if (!message) { toast('Type a request first.'); return; }
+  if (!sessionId) { toast('Create a session first.'); return; }
+  const model = document.getElementById('model-sel').value;
+  if (!model) { toast('Select an Ollama model first.'); return; }
+
+  const btn = document.getElementById('btn-ai-send');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>';
+
+  const sugArea = document.getElementById('ai-suggestions');
+  sugArea.innerHTML = `<div style="color:var(--muted);font-size:.85rem;padding:.5rem 0">Thinking…</div>`;
+
+  try {
+    const res = await fetch('/api/questions/ai-chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: sessionId, message, model }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed');
+
+    const sugs = data.suggestions || [];
+    if (sugs.length === 0) {
+      sugArea.innerHTML = `<div style="color:var(--muted);font-size:.85rem">No suggestions returned. Try rephrasing.</div>`;
+      return;
+    }
+
+    renderAiSuggestions(sugs, message);
+    inp.value = '';
+  } catch(e) {
+    sugArea.innerHTML = `<div style="color:var(--red);font-size:.85rem">Error: ${escHtml(e.message)}</div>`;
+    toast('AI error: ' + e.message, 5000);
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = 'Ask AI';
+  }
+}
+
+let _pendingSuggestions = [];
+
+function renderAiSuggestions(sugs, forRequest) {
+  _pendingSuggestions = sugs;
+  const labels = ['A','B','C','D'];
+  const sugArea = document.getElementById('ai-suggestions');
+
+  let html = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.65rem;flex-wrap:wrap;gap:.5rem">
+      <div style="font-size:.85rem;font-weight:600">${sugs.length} suggestion${sugs.length!==1?'s':''} for: <em style="color:var(--accent)">${escHtml(forRequest)}</em></div>
+      <div style="display:flex;gap:.5rem">
+        <button class="btn btn-success btn-sm" onclick="addAllSuggestions()">Add All (${sugs.length})</button>
+        <button class="btn btn-ghost btn-sm" onclick="clearSuggestions()">Dismiss</button>
+      </div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:.55rem">`;
+
+  sugs.forEach((q, i) => {
+    const optRows = q.type === 'mcq'
+      ? (q.options||[]).map((o,j) => `<div style="font-size:.78rem;${o===q.correct_answer?'color:var(--green);font-weight:600':'color:var(--muted)'}"><span style="font-weight:700;margin-right:.3rem">${labels[j]||j+1}.</span>${escHtml(o)}${o===q.correct_answer?' ✓':''}</div>`).join('')
+      : `<div style="font-size:.78rem;color:var(--green);font-weight:600">Answer: ${escHtml(q.correct_answer)}</div>`;
+
+    html += `
+      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:.85rem 1rem" id="sug-${i}">
+        <div style="display:flex;align-items:flex-start;gap:.6rem;margin-bottom:.4rem">
+          <span style="font-size:.68rem;font-weight:700;padding:2px 7px;border-radius:999px;${q.type==='mcq'?'background:rgba(108,99,255,.2);color:var(--accent)':'background:rgba(34,197,94,.15);color:var(--green)'};flex-shrink:0;margin-top:1px">${q.type==='mcq'?'MCQ':'T/F'}</span>
+          <span style="font-size:.88rem;font-weight:600;flex:1">${escHtml(q.text)}</span>
+          <button class="btn btn-success btn-sm" style="flex-shrink:0;padding:.3rem .7rem" onclick="addOneSuggestion(${i})">Add</button>
+        </div>
+        <div style="padding-left:.5rem">${optRows}</div>
+        <div style="font-size:.73rem;color:var(--muted);margin-top:.3rem">⏱ ${q.suggested_time}s</div>
+      </div>`;
+  });
+
+  html += `</div>`;
+  sugArea.innerHTML = html;
+}
+
+async function addOneSuggestion(idx) {
+  const q = _pendingSuggestions[idx];
+  if (!q) return;
+  try {
+    const res = await fetch('/api/questions/add', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        session_id: sessionId, text: q.text, type: q.type,
+        options: q.options, correct_answer: q.correct_answer, suggested_time: q.suggested_time,
+      }),
+    });
+    if (!res.ok) throw new Error('Failed to add');
+    questions.push(await res.json());
+    renderBank();
+    // Grey out the suggestion card
+    const card = document.getElementById(`sug-${idx}`);
+    if (card) {
+      card.style.opacity = '.4';
+      card.querySelector('button').disabled = true;
+      card.querySelector('button').textContent = 'Added ✓';
+    }
+    toast('Question added to bank.');
+  } catch(e) { toast('Error: ' + e.message); }
+}
+
+async function addAllSuggestions() {
+  for (let i = 0; i < _pendingSuggestions.length; i++) {
+    await addOneSuggestion(i);
+  }
+  setTimeout(clearSuggestions, 600);
+}
+
+function clearSuggestions() {
+  document.getElementById('ai-suggestions').innerHTML = '';
+  _pendingSuggestions = [];
+}
+
+// ---- Results ----
+async function fetchAndShowResults() {
+  clearInterval(pollTimer);
+  try {
+    resultsData = await fetch(`/api/session/${sessionId}/results`).then(r=>r.json());
+    const tbody = document.getElementById('results-tbody');
+    tbody.innerHTML = '';
+    const medals = ['🥇','🥈','🥉'];
+    resultsData.forEach(r => {
+      const pct = r.percentage;
+      const col = pct>=70?'var(--green)':pct>=40?'var(--yellow)':'var(--red)';
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${medals[r.rank-1]||'#'+r.rank}</td>
+        <td><strong>${escHtml(r.name)}</strong></td>
+        <td style="color:var(--muted)">${escHtml(r.roll_no)}</td>
+        <td>${r.score} / ${r.total}</td>
+        <td><div class="score-bar-wrap">
+          <div class="score-bar"><div class="score-bar-fill" style="width:${pct}%;background:${col}"></div></div>
+          <span style="font-size:.83rem;font-weight:600;color:${col}">${pct}%</span>
+        </div></td>`;
+      tbody.appendChild(tr);
+    });
+    document.getElementById('results-meta').textContent =
+      `${resultsData.length} student${resultsData.length!==1?'s':''} · ${questions.length} questions`;
+    activateStep('results');
+    markTabDone('progress');
+    markTabDone('results');
+  } catch(e) { toast('Failed to load results: '+e.message); }
+}
+
+function downloadCSV() {
+  const lines = ['Rank,Name,Roll No,Score,Total,Percentage'];
+  resultsData.forEach(r => lines.push(`${r.rank},"${r.name}","${r.roll_no}",${r.score},${r.total},${r.percentage}`));
+  const a = Object.assign(document.createElement('a'), {
+    href: URL.createObjectURL(new Blob([lines.join('\n')], {type:'text/csv'})),
+    download: 'quiz_results.csv',
+  });
+  a.click();
+}
+
+// ---- Add manual question modal ----
+function openAddModal()  { document.getElementById('add-modal').classList.add('open'); }
+function closeAddModal() {
+  document.getElementById('add-modal').classList.remove('open');
+  clearModalImage();
+  ['mq-text','mq-a','mq-b','mq-c','mq-d','mq-correct-mcq'].forEach(id=>{ const el=document.getElementById(id); if(el) el.value=''; });
+  document.getElementById('mq-time').value = '30';
+  document.getElementById('mq-type').value = 'mcq';
+  updateModalType();
+}
+function updateModalType() {
+  const t = document.getElementById('mq-type').value;
+  document.getElementById('mq-mcq-fields').style.display = t==='mcq' ? 'block' : 'none';
+  document.getElementById('mq-tf-fields').style.display  = t==='truefalse' ? 'block' : 'none';
+}
+function previewModalImage(inp) {
+  const file = inp.files[0];
+  if (!file) return;
+  const preview = document.getElementById('mq-image-preview');
+  document.getElementById('mq-image-preview-img').src = URL.createObjectURL(file);
+  document.getElementById('mq-image-name').textContent = file.name;
+  preview.style.display = 'block';
+}
+function clearModalImage() {
+  const inp = document.getElementById('mq-image');
+  inp.value = '';
+  document.getElementById('mq-image-preview').style.display = 'none';
+  document.getElementById('mq-image-preview-img').src = '';
+}
+async function submitAddQuestion() {
+  const text = document.getElementById('mq-text').value.trim();
+  if (!text) { toast('Question text required.'); return; }
+  if (!sessionId) { toast('Create a session first.'); return; }
+  const qType = document.getElementById('mq-type').value;
+  const time  = parseInt(document.getElementById('mq-time').value)||30;
+  let opts, correct;
+  if (qType==='mcq') {
+    opts    = ['mq-a','mq-b','mq-c','mq-d'].map(id=>document.getElementById(id).value.trim());
+    correct = document.getElementById('mq-correct-mcq').value.trim();
+    if (opts.some(o=>!o)) { toast('All 4 options are required.'); return; }
+    if (!opts.includes(correct)) { toast('Correct answer must exactly match one option.'); return; }
+  } else {
+    opts    = ['True','False'];
+    correct = document.getElementById('mq-correct-tf').value;
+  }
+  try {
+    const r = await fetch('/api/questions/add', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ session_id:sessionId, text, type:qType, options:opts, correct_answer:correct, suggested_time:time }),
+    });
+    if (!r.ok) throw new Error('Failed');
+    let newQ = await r.json();
+
+    // Upload image if one was selected
+    const imageFile = document.getElementById('mq-image').files[0];
+    if (imageFile) {
+      const fd = new FormData();
+      fd.append('image', imageFile);
+      const ir = await fetch(`/api/questions/${newQ.id}/upload-image`, { method:'POST', body:fd });
+      if (ir.ok) {
+        const { image_url } = await ir.json();
+        newQ.image_url = image_url;
+      }
+    }
+
+    questions.push(newQ);
+    renderBank();
+    document.getElementById('bank-section').style.display='block';
+    document.getElementById('ai-chat-section').style.display='block';
+    closeAddModal();
+    toast('Question added to bank.');
+  } catch(e) { toast('Error: '+e.message); }
+}
+
+// ---- Student chip ----
+function appendStudentChip(name, roll) {
+  const c = document.createElement('div');
+  c.className = 's-chip';
+  c.innerHTML = `<div class="s-av">${escHtml((name[0]||'?').toUpperCase())}</div><span>${escHtml(name)}</span><span class="s-roll">${escHtml(roll)}</span>`;
+  document.getElementById('s-list').appendChild(c);
+}
+
+// ---- Tab navigation ----
+function goTab(name) {
+  // Only allow navigating to completed/current tabs
+  const order = ['bank','lobby','progress','results'];
+  activateStep(name);
+}
+
+function activateStep(name) {
+  ['bank','lobby','progress','results'].forEach(n => {
+    document.getElementById(`panel-${n}`).classList.remove('active');
+    document.getElementById(`tab-${n}`).classList.remove('active');
+  });
+  document.getElementById(`panel-${name}`).classList.add('active');
+  document.getElementById(`tab-${name}`).classList.add('active');
+}
+
+function markTabDone(name) {
+  const tab = document.getElementById(`tab-${name}`);
+  if (!tab.classList.contains('active')) {
+    tab.classList.add('done');
+    document.getElementById(`snum-${name}`).textContent = '✓';
+  }
+}
+
+// ---- Toast ----
+let _tt;
+function toast(msg, dur=3500) {
+  const el = document.getElementById('toast');
+  el.textContent = msg; el.classList.add('show');
+  clearTimeout(_tt); _tt = setTimeout(()=>el.classList.remove('show'), dur);
+}
+
+// ---- Util ----
+function escHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+// ---- Hotspot ----
+let _hsRunning = false;
+let _hsIface   = 'wlan0';
+
+async function loadHotspotStatus() {
+  try {
+    const d = await fetch('/api/hotspot/status').then(r => r.json());
+    _hsRunning = d.running;
+    _hsIface   = d.interface || 'wlan0';
+    _applyHotspotUI(d);
+  } catch(e) {
+    document.getElementById('hs-label').textContent = 'Hotspot: unavailable';
+  }
+}
+
+function _applyHotspotUI(d) {
+  const dot    = document.getElementById('hs-dot');
+  const label  = document.getElementById('hs-label');
+  const badge  = document.getElementById('hs-ssid-badge');
+  const btnCfg = document.getElementById('btn-hs-config');
+  const btnStop= document.getElementById('btn-hs-stop');
+
+  const urlHint = document.getElementById('hs-url-hint');
+  const urlText = document.getElementById('hs-url-text');
+  if (d.running) {
+    dot.className = 'hs-dot on';
+    label.textContent = 'Hotspot: Active';
+    label.style.color = 'var(--green)';
+    badge.textContent = d.ssid;
+    badge.style.display = 'inline-block';
+    btnCfg.style.display = 'none';
+    btnStop.style.display = 'inline-flex';
+    const port = d.port && d.port !== '80' ? `:${d.port}` : '';
+    urlText.textContent = `10.42.0.1${port}`;
+    urlHint.style.display = 'inline';
+  } else {
+    dot.className = 'hs-dot';
+    label.textContent = 'Hotspot: Not running';
+    label.style.color = 'var(--muted)';
+    badge.style.display = 'none';
+    btnCfg.style.display = 'inline-flex';
+    btnStop.style.display = 'none';
+    urlHint.style.display = 'none';
+  }
+
+  // Populate interface selector with detected interfaces
+  if (d.interfaces?.length) {
+    const sel = document.getElementById('hs-iface');
+    sel.innerHTML = d.interfaces.map(i => `<option value="${escHtml(i)}">${escHtml(i)}</option>`).join('');
+    if (d.interface) sel.value = d.interface;
+  }
+}
+
+function openHotspotModal() {
+  document.getElementById('hs-modal-err').style.display = 'none';
+  document.getElementById('hs-modal-log').style.display = 'none';
+  document.getElementById('hs-modal').classList.add('open');
+}
+
+function closeHotspotModal() {
+  document.getElementById('hs-modal').classList.remove('open');
+}
+
+async function startHotspot() {
+  const ssid  = document.getElementById('hs-ssid').value.trim();
+  const pass  = document.getElementById('hs-pass').value.trim();
+  const iface = document.getElementById('hs-iface').value;
+  const errEl = document.getElementById('hs-modal-err');
+  const logEl = document.getElementById('hs-modal-log');
+
+  if (!ssid) { errEl.textContent = 'Enter a network name.'; errEl.style.display = 'block'; return; }
+  if (pass.length < 8) { errEl.textContent = 'Password must be at least 8 characters.'; errEl.style.display = 'block'; return; }
+  errEl.style.display = 'none';
+
+  const btn = document.getElementById('btn-hs-start');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Starting…';
+  logEl.textContent = 'Running setup script (may take up to 30s)…';
+  logEl.style.display = 'block';
+
+  try {
+    const r = await fetch('/api/hotspot/start', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ssid, password: pass, interface: iface }),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Failed');
+
+    _hsRunning = true;
+    _hsIface = iface;
+    _applyHotspotUI({ running: true, ssid, interface: iface, interfaces: [iface] });
+    closeHotspotModal();
+    toast(`Hotspot "${ssid}" is live. Students can now connect.`, 5000);
+  } catch(e) {
+    errEl.textContent = 'Error: ' + e.message;
+    errEl.style.display = 'block';
+    logEl.textContent = e.message;
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = 'Deploy Hotspot';
+  }
+}
+
+async function stopHotspot() {
+  if (!confirm('Stop the hotspot? Connected students will be disconnected.')) return;
+  const btn = document.getElementById('btn-hs-stop');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>';
+  try {
+    const r = await fetch('/api/hotspot/stop', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ interface: _hsIface }),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Failed');
+    _hsRunning = false;
+    _applyHotspotUI({ running: false, interfaces: [_hsIface] });
+    toast('Hotspot stopped.');
+  } catch(e) {
+    toast('Error stopping hotspot: ' + e.message, 5000);
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = 'Stop Hotspot';
+  }
+}
+</script>
+</body>
+</html>
