@@ -431,6 +431,29 @@ def api_question_delete(question_id):
     return jsonify({"ok": True})
 
 
+@app.route("/api/questions/delete-bulk", methods=["POST"])
+@faculty_required
+def api_questions_delete_bulk():
+    """Delete multiple questions by ID list."""
+    ids = request.get_json(force=True).get("ids", [])
+    if not ids:
+        return jsonify({"ok": True, "deleted": 0})
+    with get_db() as conn:
+        rows = conn.execute(
+            f"SELECT image_url FROM questions WHERE id IN ({','.join('?'*len(ids))})", ids
+        ).fetchall()
+        for row in rows:
+            if row["image_url"]:
+                path = os.path.join(os.path.dirname(__file__), row["image_url"].lstrip("/"))
+                if os.path.exists(path):
+                    os.remove(path)
+        placeholders = ','.join('?' * len(ids))
+        conn.execute(f"DELETE FROM student_questions WHERE question_id IN ({placeholders})", ids)
+        conn.execute(f"DELETE FROM answers WHERE question_id IN ({placeholders})", ids)
+        conn.execute(f"DELETE FROM questions WHERE id IN ({placeholders})", ids)
+    return jsonify({"ok": True, "deleted": len(ids)})
+
+
 @app.route("/api/questions/add", methods=["POST"])
 @faculty_required
 def api_question_add():

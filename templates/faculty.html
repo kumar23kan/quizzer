@@ -73,6 +73,11 @@
   .spinner { display: inline-block; width: 15px; height: 15px; border: 2px solid rgba(255,255,255,.3); border-top-color: #fff; border-radius: 50%; animation: spin .7s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
 
+  /* ---- Selection ---- */
+  .q-checkbox { width: 17px; height: 17px; accent-color: var(--accent); cursor: pointer; flex-shrink: 0; margin-top: 3px; }
+  .sel-bar { display:none; align-items:center; gap:.65rem; background:rgba(108,99,255,.1); border:1px solid rgba(108,99,255,.3); border-radius:8px; padding:.45rem .85rem; margin-bottom:.65rem; font-size:.85rem; }
+  .sel-bar.show { display:flex; }
+
   /* ---- Question bank list ---- */
   .q-list { display: flex; flex-direction: column; gap: .65rem; }
   .q-card { background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius); padding: .9rem 1rem; }
@@ -270,10 +275,11 @@
 
   <!-- Bank list (shown after generation or resume) -->
   <div id="bank-section" style="display:none">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.65rem;flex-wrap:wrap;gap:.5rem">
-      <div>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.55rem;flex-wrap:wrap;gap:.5rem">
+      <div style="display:flex;align-items:center;gap:.6rem">
+        <input type="checkbox" class="q-checkbox" id="chk-select-all" title="Select all" onchange="toggleSelectAll(this.checked)" />
         <span style="font-weight:600" id="bank-title">Question Bank</span>
-        <span style="color:var(--muted);font-size:.82rem;margin-left:.5rem" id="bank-count"></span>
+        <span style="color:var(--muted);font-size:.82rem" id="bank-count"></span>
       </div>
       <div style="display:flex;gap:.5rem">
         <button class="btn btn-ghost btn-sm" onclick="openAddModal()">+ Add Manually</button>
@@ -282,6 +288,15 @@
         </button>
       </div>
     </div>
+
+    <!-- Selection action bar -->
+    <div class="sel-bar" id="sel-bar">
+      <span id="sel-count" style="font-weight:600"></span>
+      <span style="color:var(--muted)">selected</span>
+      <button class="btn btn-danger btn-sm" onclick="deleteSelected()">Delete Selected</button>
+      <button class="btn btn-ghost btn-sm" onclick="clearSelection()">Deselect All</button>
+    </div>
+
     <div class="q-list" id="q-list"></div>
   </div>
 
@@ -700,6 +715,7 @@ function buildQCard(q, idx) {
 
   div.innerHTML = `
     <div class="q-card-top">
+      <input type="checkbox" class="q-checkbox" id="chk-${q.id}" data-qid="${q.id}" onchange="onCardCheck()" />
       <div class="q-num">${idx+1}</div>
       <span class="q-type-tag ${q.type}">${q.type==='mcq'?'MCQ':'T/F'}</span>
       <div class="q-actions">
@@ -755,6 +771,49 @@ async function deleteQuestion(qId) {
     questions = questions.filter(q => q.id !== qId);
     renderBank();
     toast('Question removed.');
+  } catch(e) { toast('Error: ' + e.message); }
+}
+
+// ---- Bulk selection ----
+function _selectedIds() {
+  return [...document.querySelectorAll('.q-checkbox[data-qid]:checked')]
+    .map(el => parseInt(el.dataset.qid));
+}
+
+function onCardCheck() {
+  const ids = _selectedIds();
+  const selBar  = document.getElementById('sel-bar');
+  const selCount = document.getElementById('sel-count');
+  const allChk  = document.getElementById('chk-select-all');
+  selBar.classList.toggle('show', ids.length > 0);
+  selCount.textContent = ids.length;
+  allChk.indeterminate = ids.length > 0 && ids.length < questions.length;
+  allChk.checked = ids.length === questions.length && questions.length > 0;
+}
+
+function toggleSelectAll(checked) {
+  document.querySelectorAll('.q-checkbox[data-qid]').forEach(el => el.checked = checked);
+  onCardCheck();
+}
+
+function clearSelection() {
+  document.querySelectorAll('.q-checkbox').forEach(el => el.checked = false);
+  onCardCheck();
+}
+
+async function deleteSelected() {
+  const ids = _selectedIds();
+  if (!ids.length) return;
+  if (!confirm(`Delete ${ids.length} selected question${ids.length !== 1 ? 's' : ''}?`)) return;
+  try {
+    const r = await fetch('/api/questions/delete-bulk', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids }),
+    });
+    if (!r.ok) throw new Error('Bulk delete failed');
+    questions = questions.filter(q => !ids.includes(q.id));
+    renderBank();
+    toast(`${ids.length} question${ids.length !== 1 ? 's' : ''} deleted.`);
   } catch(e) { toast('Error: ' + e.message); }
 }
 
