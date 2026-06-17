@@ -415,6 +415,22 @@ def api_remove_image(question_id):
     return jsonify({"ok": True})
 
 
+@app.route("/api/questions/<int:question_id>", methods=["DELETE"])
+@faculty_required
+def api_question_delete(question_id):
+    """Delete a single question (and its image if any)."""
+    with get_db() as conn:
+        row = conn.execute("SELECT image_url FROM questions WHERE id=?", (question_id,)).fetchone()
+        if row and row["image_url"]:
+            file_path = os.path.join(os.path.dirname(__file__), row["image_url"].lstrip("/"))
+            if os.path.exists(file_path):
+                os.remove(file_path)
+        conn.execute("DELETE FROM student_questions WHERE question_id=?", (question_id,))
+        conn.execute("DELETE FROM answers WHERE question_id=?", (question_id,))
+        conn.execute("DELETE FROM questions WHERE id=?", (question_id,))
+    return jsonify({"ok": True})
+
+
 @app.route("/api/questions/add", methods=["POST"])
 @faculty_required
 def api_question_add():

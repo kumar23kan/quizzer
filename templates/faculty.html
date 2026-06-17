@@ -704,6 +704,7 @@ function buildQCard(q, idx) {
       <span class="q-type-tag ${q.type}">${q.type==='mcq'?'MCQ':'T/F'}</span>
       <div class="q-actions">
         <button class="btn btn-ghost btn-sm" onclick="toggleEdit(${q.id})">Edit</button>
+        <button class="btn btn-ghost btn-sm" style="color:var(--red);border-color:var(--red)" onclick="deleteQuestion(${q.id})">✕</button>
       </div>
     </div>
     <div class="q-body">
@@ -745,6 +746,17 @@ function buildQCard(q, idx) {
 }
 
 function toggleEdit(id) { document.getElementById(`qef-${id}`).classList.toggle('open'); }
+
+async function deleteQuestion(qId) {
+  if (!confirm('Remove this question from the bank?')) return;
+  try {
+    const r = await fetch(`/api/questions/${qId}`, { method: 'DELETE' });
+    if (!r.ok) throw new Error('Delete failed');
+    questions = questions.filter(q => q.id !== qId);
+    renderBank();
+    toast('Question removed.');
+  } catch(e) { toast('Error: ' + e.message); }
+}
 
 async function saveEdit(qId, qType) {
   const text    = document.getElementById(`et-${qId}`).value.trim();
