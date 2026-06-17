@@ -5,17 +5,21 @@ A self-hosted classroom quiz system that runs entirely offline over a local WiFi
 ## Features
 
 - **AI question generation** via [Ollama](https://ollama.com) (local LLM, no cloud)
+- **PDF-based question generation** — upload a document and AI generates questions from its content
 - **AI chat assistant** — ask in plain English to add or refine questions
-- **Manual question entry** with optional image upload (MCQ or True/False)
+- **Three question types** — Multiple Choice, True/False, and **Short Answer** (image + typed response)
+- **AI grading for short answers** — after the quiz, faculty triggers batch grading; Ollama evaluates each response against the model answer and awards partial or full marks
+- **Manual question entry** with optional image upload
 - **Delete individual questions** or **bulk-delete selected questions** from the bank at any time
 - **Cumulative question bank** — generating questions multiple times appends to the bank rather than replacing it
-- **Per-question time limits** (AI-suggested, faculty-editable)
+- **Per-question time limits** (AI-suggested, faculty-editable) and **per-question marks** for short answers
 - **Anti-copy randomisation** — every student gets the same questions in a different order
 - **WiFi hotspot with captive portal** — students' browsers open the quiz automatically on connect
-- **Student internet blocked** via iptables; teacher's machine keeps its own connection
+- **Student internet strictly blocked** — iptables restricts hotspot clients to quiz port only (DHCP, DNS, and app port; SSH and all other ports blocked)
+- **Auto-reconnect on hotspot stop** — teacher's preferred WiFi connection is saved on hotspot start and restored by name when the hotspot is stopped
 - **Live progress dashboard** — see each student's answered/correct count in real time
 - **Timer extension** mid-quiz (+5/+10/+15 min or custom)
-- **Results leaderboard** with CSV export
+- **Results leaderboard** with MCQ score, AI-graded marks, combined total, and CSV export
 
 ## Requirements
 
@@ -26,6 +30,7 @@ A self-hosted classroom quiz system that runs entirely offline over a local WiFi
 | Flask-SocketIO | ≥ 5.3 |
 | gevent / gevent-websocket | ≥ 23.9 / 0.10 |
 | requests | ≥ 2.31 |
+| pdfplumber | ≥ 0.10 |
 | Ollama | any recent build |
 | hostapd + dnsmasq | (hotspot only, Linux) |
 
@@ -89,13 +94,24 @@ sudo bash teardown_hotspot.sh
 
 | Step | Action |
 |---|---|
-| 1 | Enter topic → **Generate Questions** (AI fills the bank; repeat to add more without losing existing questions) |
-| 2 | Edit questions, adjust time limits, attach images; remove unwanted ones with ✕ or select multiple and bulk-delete |
+| 1 | Enter topic → **Generate from Topic** (AI fills the bank; repeat to add more without losing existing questions) |
+| 1a | Or click **Upload PDF** to generate questions from a document |
+| 2 | Edit questions, adjust time limits, attach images; remove unwanted ones with ✕ or bulk-delete |
+| 2a | Add **Short Answer** questions via `+ Add Manually` — set the model answer and marks; optionally attach an image |
 | 3 | Use the **AI Assistant** to add or refine questions in plain English |
 | 4 | Click **Proceed to Lobby** → students can now join |
 | 5 | Click **Start Quiz** when everyone is in |
 | 6 | Monitor live progress; use **Extend Timer** if needed |
-| 7 | View results → **Download CSV** |
+| 7 | After quiz ends, click **Grade Short Answers with AI** in the Results tab (if any SA questions exist) |
+| 8 | View final results (MCQ score + AI marks combined) → **Download CSV** |
+
+### Short Answer Questions
+
+When a question is of type **Short Answer**:
+- Students see the question (and image if attached) and type a free-text response
+- The response is submitted but not graded live — students see "your teacher will grade it after the quiz"
+- After the quiz ends, faculty clicks **Grade Short Answers with AI** — Ollama reads each response against the model answer and awards marks (including partial marks)
+- Marks are written back to the results table immediately
 
 ## Security Notes
 
@@ -108,7 +124,7 @@ sudo bash teardown_hotspot.sh
 ```
 quizzer/
 ├── app.py                  # Flask backend, Socket.IO events, REST API
-├── ai_generator.py         # Ollama question generation and AI chat
+├── ai_generator.py         # Ollama question generation, AI chat, short-answer grading, PDF generation
 ├── requirements.txt
 ├── setup_hotspot.sh        # hostapd + dnsmasq + iptables hotspot setup
 ├── teardown_hotspot.sh     # hotspot teardown
