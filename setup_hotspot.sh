@@ -129,6 +129,8 @@ iptables -N QUIZZER_INPUT 2>/dev/null || iptables -F QUIZZER_INPUT
 iptables -C INPUT -i "$WIFI_IFACE" -j QUIZZER_INPUT 2>/dev/null || \
   iptables -A INPUT -i "$WIFI_IFACE" -j QUIZZER_INPUT
 
+# Allow return traffic for connections the faculty machine itself initiated
+iptables -A QUIZZER_INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 # Allow DHCP (students need an IP address)
 iptables -A QUIZZER_INPUT -p udp --dport 67 -j ACCEPT
 # Allow DNS queries to dnsmasq on this machine
@@ -139,9 +141,11 @@ iptables -A QUIZZER_INPUT -p tcp --dport "$PORT" -j ACCEPT
 # Block all other ports (SSH, etc.) from hotspot clients
 iptables -A QUIZZER_INPUT -j DROP
 
-# Allow already-established / related connections through FORWARD
+# Allow return traffic for established connections through FORWARD
 iptables -A FORWARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-# DROP all forwarding from hotspot subnet → no internet routing for students
+# Allow forwarding from non-hotspot interfaces (faculty machine's own internet)
+iptables -A FORWARD -i "!" "$WIFI_IFACE" -j ACCEPT
+# DROP forwarding from hotspot subnet → no internet for students
 iptables -A FORWARD -s "${SERVER_IP%.*}.0/24" -j DROP
 
 # Force ALL student DNS queries to our dnsmasq (prevents DoH / hardcoded DNS bypass)

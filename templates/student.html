@@ -490,6 +490,12 @@ function startPerQuestionTimer(seconds) {
 
 function autoTimeOut() {
   document.querySelectorAll('#options-list .opt-btn').forEach(b => b.disabled = true);
+  const saInput = document.getElementById('sa-input');
+  if (saInput) {
+    saInput.disabled = true;
+    const saBtn = saInput.closest('div')?.querySelector('button');
+    if (saBtn) saBtn.disabled = true;
+  }
   document.getElementById('q-timer-ring-wrap').style.display = 'none';
   const fb = document.getElementById('q-feedback');
   fb.className = 'feedback show wrong-fb';
