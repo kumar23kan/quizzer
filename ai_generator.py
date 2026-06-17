@@ -8,14 +8,38 @@ import requests
 OLLAMA_BASE_URL = "http://localhost:11434"
 
 
-def generate_questions(topic: str, count: int, difficulty: str, model: str):
+_BLOOM_DESCRIPTIONS = {
+    "Remember":   "recall and recognise facts, definitions, and basic concepts (e.g. list, identify, name)",
+    "Understand": "explain ideas or concepts in their own words (e.g. describe, summarise, classify)",
+    "Apply":      "use knowledge in new situations or to solve problems (e.g. calculate, demonstrate, solve)",
+    "Analyze":    "draw connections, break down information, identify patterns (e.g. compare, distinguish, examine)",
+    "Evaluate":   "justify a decision or course of action, make judgements (e.g. argue, defend, critique)",
+    "Create":     "produce new or original work, combine ideas in a new way (e.g. design, formulate, construct)",
+}
+
+
+def generate_questions(topic: str, count: int, difficulty: str, bloom_level: str, model: str):
     """
     Generate quiz questions via Ollama.
 
     Returns a list of validated question dicts (up to `count`), or None on failure.
     Each dict has: text, type, options, correct_answer, suggested_time.
     """
+    if bloom_level and bloom_level != "Mixed" and bloom_level in _BLOOM_DESCRIPTIONS:
+        bloom_instruction = (
+            f"All questions must target the Bloom's Taxonomy level: "
+            f"**{bloom_level}** — {_BLOOM_DESCRIPTIONS[bloom_level]}."
+        )
+    else:
+        levels = ", ".join(_BLOOM_DESCRIPTIONS.keys())
+        bloom_instruction = (
+            f"Distribute questions across all Bloom's Taxonomy levels ({levels}) "
+            f"so the set tests a range of cognitive skills."
+        )
+
     prompt = f"""Generate exactly {count} quiz questions about "{topic}" at {difficulty} difficulty level.
+
+{bloom_instruction}
 
 Return ONLY a valid JSON array with no additional text, markdown, or explanation.
 
@@ -44,7 +68,7 @@ Example format:
   }}
 ]
 
-Generate {count} questions about "{topic}" at {difficulty} difficulty. Return ONLY the JSON array:"""
+Generate {count} questions about "{topic}" at {difficulty} difficulty ({bloom_level} Bloom's level). Return ONLY the JSON array:"""
 
     try:
         response = requests.post(

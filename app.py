@@ -302,13 +302,14 @@ def api_session_create():
 @faculty_required
 def api_questions_generate():
     data = request.get_json(force=True)
-    session_id = int(data.get("session_id", 0))
-    topic = (data.get("topic") or "").strip()
-    count = max(1, min(50, int(data.get("count", 20))))
-    difficulty = data.get("difficulty", "Medium")
-    model = data.get("model", "llama2")
+    session_id  = int(data.get("session_id", 0))
+    topic       = (data.get("topic") or "").strip()
+    count       = max(1, min(50, int(data.get("count", 20))))
+    difficulty  = data.get("difficulty", "Medium")
+    bloom_level = data.get("bloom_level", "Mixed")
+    model       = data.get("model", "llama2")
 
-    questions = ai_generator.generate_questions(topic, count, difficulty, model)
+    questions = ai_generator.generate_questions(topic, count, difficulty, bloom_level, model)
     if questions is None:
         return jsonify({"error": "Failed to generate questions. Is Ollama running?"}), 502
 

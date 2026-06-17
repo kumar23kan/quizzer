@@ -261,6 +261,18 @@
         </select>
       </div>
       <div class="form-group">
+        <label>Bloom's Taxonomy Level</label>
+        <select id="bloom-sel">
+          <option value="Mixed">Mixed (all levels)</option>
+          <option value="Remember">Remember — recall facts</option>
+          <option value="Understand">Understand — explain concepts</option>
+          <option value="Apply">Apply — use in new situations</option>
+          <option value="Analyze">Analyze — draw connections</option>
+          <option value="Evaluate">Evaluate — justify decisions</option>
+          <option value="Create">Create — produce new ideas</option>
+        </select>
+      </div>
+      <div class="form-group">
         <label>Ollama Model</label>
         <select id="model-sel"><option value="">Loading…</option></select>
       </div>
@@ -617,6 +629,7 @@ async function handleGenerate() {
   const topic = document.getElementById('topic-inp').value.trim();
   const count = parseInt(document.getElementById('count-inp').value) || 15;
   const diff  = document.getElementById('diff-sel').value;
+  const bloom = document.getElementById('bloom-sel').value;
   const model = document.getElementById('model-sel').value;
 
   if (!topic) { toast('Enter a topic first.'); return; }
@@ -627,7 +640,8 @@ async function handleGenerate() {
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span> Generating…';
   sta.style.display = 'block';
-  sta.textContent = `Generating ${count} ${diff.toLowerCase()} questions about "${topic}"…`;
+  const bloomLabel = bloom === 'Mixed' ? 'mixed Bloom\'s levels' : `Bloom's: ${bloom}`;
+  sta.textContent = `Generating ${count} ${diff.toLowerCase()} questions about "${topic}" (${bloomLabel})…`;
 
   try {
     // Only create a new session when none exists yet
@@ -643,7 +657,7 @@ async function handleGenerate() {
 
     const gr = await fetch('/api/questions/generate', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ session_id: sessionId, topic, count, difficulty: diff, model }),
+      body: JSON.stringify({ session_id: sessionId, topic, count, difficulty: diff, bloom_level: bloom, model }),
     });
     if (!gr.ok) { const e = await gr.json(); throw new Error(e.error || 'Generation failed'); }
     // Backend returns ALL questions for the session; replace local array with full list
