@@ -630,23 +630,26 @@ async function handleGenerate() {
   sta.textContent = `Generating ${count} ${diff.toLowerCase()} questions about "${topic}"…`;
 
   try {
-    // Create/reset session
-    const sr = await fetch('/api/session/create', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ topic }),
-    });
-    if (!sr.ok) throw new Error(await sr.text());
-    sessionId = (await sr.json()).session_id;
-    socket.emit('faculty_join', { session_id: sessionId });
+    // Only create a new session when none exists yet
+    if (!sessionId) {
+      const sr = await fetch('/api/session/create', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ topic }),
+      });
+      if (!sr.ok) throw new Error(await sr.text());
+      sessionId = (await sr.json()).session_id;
+      socket.emit('faculty_join', { session_id: sessionId });
+    }
 
     const gr = await fetch('/api/questions/generate', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ session_id: sessionId, topic, count, difficulty: diff, model }),
     });
     if (!gr.ok) { const e = await gr.json(); throw new Error(e.error || 'Generation failed'); }
+    // Backend returns ALL questions for the session; replace local array with full list
     questions = (await gr.json()).questions;
 
-    sta.textContent = `✓ ${questions.length} questions saved to bank.`;
+    sta.textContent = `✓ ${questions.length} question${questions.length !== 1 ? 's' : ''} in bank.`;
     renderBank();
     document.getElementById('bank-section').style.display = 'block';
     document.getElementById('ai-chat-section').style.display = 'block';

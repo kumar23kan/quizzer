@@ -313,14 +313,17 @@ def api_questions_generate():
         return jsonify({"error": "Failed to generate questions. Is Ollama running?"}), 502
 
     with get_db() as conn:
-        conn.execute("DELETE FROM questions WHERE session_id=?", (session_id,))
+        # Find next order_index so new questions are appended after existing ones
+        last = conn.execute(
+            "SELECT COALESCE(MAX(order_index), -1) FROM questions WHERE session_id=?", (session_id,)
+        ).fetchone()[0]
         for idx, q in enumerate(questions):
             conn.execute(
                 """INSERT INTO questions
                    (session_id, text, type, options, correct_answer, suggested_time, order_index)
                    VALUES (?, ?, ?, ?, ?, ?, ?)""",
                 (session_id, q["text"], q["type"], json.dumps(q["options"]),
-                 q["correct_answer"], q["suggested_time"], idx),
+                 q["correct_answer"], q["suggested_time"], last + 1 + idx),
             )
         rows = conn.execute(
             "SELECT * FROM questions WHERE session_id=? ORDER BY order_index", (session_id,)
