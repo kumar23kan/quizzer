@@ -7,6 +7,7 @@ A self-hosted classroom quiz system that runs entirely offline over a local WiFi
 - **AI question generation** via [Ollama](https://ollama.com) (local LLM, no cloud)
 - **AI chat assistant** — ask in plain English to add or refine questions
 - **Manual question entry** with optional image upload (MCQ or True/False)
+- **Delete individual questions** from the bank at any time
 - **Per-question time limits** (AI-suggested, faculty-editable)
 - **Anti-copy randomisation** — every student gets the same questions in a different order
 - **WiFi hotspot with captive portal** — students' browsers open the quiz automatically on connect
@@ -88,7 +89,7 @@ sudo bash teardown_hotspot.sh
 | Step | Action |
 |---|---|
 | 1 | Enter topic → **Generate Questions** (AI fills the bank) |
-| 2 | Edit questions, adjust time limits, attach images |
+| 2 | Edit questions, adjust time limits, attach images, or remove unwanted ones (✕ button) |
 | 3 | Use the **AI Assistant** to add more questions in plain English |
 | 4 | Click **Proceed to Lobby** → students can now join |
 | 5 | Click **Start Quiz** when everyone is in |
