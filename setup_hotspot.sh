@@ -42,8 +42,14 @@ if [[ ${#PKGS_NEEDED[@]} -gt 0 ]]; then
   apt-get install -y -qq "${PKGS_NEEDED[@]}"
 fi
 
-# ---- 3. Stop NetworkManager management of the interface ----
+# ---- 3. Save current preferred connection, then release interface ----
 if command -v nmcli >/dev/null 2>&1; then
+  # Save whichever WiFi connection is currently active so teardown can restore it
+  PREFERRED_CONN=$(nmcli -t -f NAME,DEVICE con show --active 2>/dev/null \
+    | grep ":${WIFI_IFACE}$" | head -1 | cut -d: -f1 || true)
+  echo "$PREFERRED_CONN" > /tmp/quizzer_preferred_conn
+  echo "[*] Current connection on $WIFI_IFACE: '${PREFERRED_CONN:-none}' (saved for restore)"
+
   echo "[*] Releasing $WIFI_IFACE from NetworkManager…"
   nmcli device set "$WIFI_IFACE" managed no 2>/dev/null || true
 fi
@@ -107,39 +113,46 @@ echo "[*] Enabling IP forwarding…"
 sysctl -w net.ipv4.ip_forward=1
 
 # ---- 11. iptables rules ----
-# Goal: students (hotspot clients) reach ONLY this server.
-#       Faculty machine (runs the server) keeps full internet via its upstream link.
-#       The iptables FORWARD chain only affects traffic being routed THROUGH the machine,
-#       not traffic originating FROM it — so faculty internet is unaffected.
+# Goal: students (hotspot clients) reach ONLY this server (quiz + DNS + DHCP).
+#       Faculty machine keeps full internet via its upstream link.
+#       FORWARD chain only affects traffic routed THROUGH the machine.
+#       QUIZZER_INPUT chain restricts what students can reach ON this machine.
 echo "[*] Setting up iptables…"
 
-# Flush chains we manage
+# Flush / reset rules we own
 iptables -F FORWARD
 iptables -t nat -F PREROUTING  2>/dev/null || true
 iptables -t nat -F POSTROUTING 2>/dev/null || true
 
-# Allow already-established / related connections through
+# Set up named INPUT chain so we don't disturb other INPUT rules (ssh, etc.)
+iptables -N QUIZZER_INPUT 2>/dev/null || iptables -F QUIZZER_INPUT
+iptables -C INPUT -i "$WIFI_IFACE" -j QUIZZER_INPUT 2>/dev/null || \
+  iptables -A INPUT -i "$WIFI_IFACE" -j QUIZZER_INPUT
+
+# Allow DHCP (students need an IP address)
+iptables -A QUIZZER_INPUT -p udp --dport 67 -j ACCEPT
+# Allow DNS queries to dnsmasq on this machine
+iptables -A QUIZZER_INPUT -p udp --dport 53 -j ACCEPT
+iptables -A QUIZZER_INPUT -p tcp --dport 53 -j ACCEPT
+# Allow the quiz app port
+iptables -A QUIZZER_INPUT -p tcp --dport "$PORT" -j ACCEPT
+# Block all other ports (SSH, etc.) from hotspot clients
+iptables -A QUIZZER_INPUT -j DROP
+
+# Allow already-established / related connections through FORWARD
 iptables -A FORWARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-
-# Allow student traffic destined for this server's app port
-iptables -A FORWARD -s "${SERVER_IP%.*}.0/24" -d "$SERVER_IP" -p tcp --dport "$PORT" -j ACCEPT
-
-# DROP all other forwarding from the hotspot subnet → no internet for students
+# DROP all forwarding from hotspot subnet → no internet routing for students
 iptables -A FORWARD -s "${SERVER_IP%.*}.0/24" -j DROP
 
-# NAT (not strictly needed since students can't reach internet, but kept for completeness)
-iptables -t nat -A POSTROUTING -s "${SERVER_IP%.*}.0/24" -j MASQUERADE
-
-# Force ALL student DNS queries to our dnsmasq (prevents hardcoded / DoH bypass)
+# Force ALL student DNS queries to our dnsmasq (prevents DoH / hardcoded DNS bypass)
 iptables -t nat -A PREROUTING -i "$WIFI_IFACE" -p udp --dport 53 -j DNAT --to-destination "${SERVER_IP}:53"
 iptables -t nat -A PREROUTING -i "$WIFI_IFACE" -p tcp --dport 53 -j DNAT --to-destination "${SERVER_IP}:53"
-# Block DNS-over-TLS (port 853) so clients fall back to plain DNS through dnsmasq
+# Block DNS-over-TLS (port 853)
 iptables -A FORWARD -i "$WIFI_IFACE" -p tcp --dport 853 -j DROP
 iptables -A FORWARD -i "$WIFI_IFACE" -p udp --dport 853 -j DROP
 
-# Redirect student port-80 requests aimed at ANY IP → our server (captive portal)
+# Redirect student HTTP/HTTPS to quiz server → triggers captive portal detection
 iptables -t nat -A PREROUTING -i "$WIFI_IFACE" -p tcp --dport 80  -j DNAT --to-destination "${SERVER_IP}:${PORT}"
-# Redirect HTTPS → our server too (shows captive portal prompt on iOS/Android)
 iptables -t nat -A PREROUTING -i "$WIFI_IFACE" -p tcp --dport 443 -j DNAT --to-destination "${SERVER_IP}:${PORT}"
 
 # Save current config for teardown reference

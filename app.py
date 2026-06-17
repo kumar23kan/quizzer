@@ -98,6 +98,7 @@ def init_db():
                 suggested_time INTEGER DEFAULT 30,
                 order_index INTEGER NOT NULL,
                 image_url TEXT DEFAULT NULL,
+                marks INTEGER DEFAULT 1,
                 FOREIGN KEY (session_id) REFERENCES sessions(id)
             );
 
@@ -130,11 +131,27 @@ def init_db():
                 is_correct INTEGER DEFAULT 0,
                 time_taken INTEGER,
                 submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                marks_awarded REAL DEFAULT NULL,
+                ai_feedback TEXT DEFAULT NULL,
                 UNIQUE(student_id, question_id),
                 FOREIGN KEY (student_id) REFERENCES students(id),
                 FOREIGN KEY (question_id) REFERENCES questions(id)
             );
         """)
+
+
+def _migrate_db():
+    """Add columns introduced in newer versions — safe to run on existing DBs."""
+    with get_db() as conn:
+        for ddl in [
+            "ALTER TABLE questions ADD COLUMN marks INTEGER DEFAULT 1",
+            "ALTER TABLE answers ADD COLUMN marks_awarded REAL DEFAULT NULL",
+            "ALTER TABLE answers ADD COLUMN ai_feedback TEXT DEFAULT NULL",
+        ]:
+            try:
+                conn.execute(ddl)
+            except Exception:
+                pass  # Column already exists
 
 
 # ---------------------------------------------------------------------------
@@ -361,11 +378,11 @@ def api_question_update(question_id):
     with get_db() as conn:
         conn.execute(
             """UPDATE questions
-               SET text=?, type=?, options=?, correct_answer=?, suggested_time=?
+               SET text=?, type=?, options=?, correct_answer=?, suggested_time=?, marks=?
                WHERE id=?""",
             (data.get("text","").strip(), data.get("type","mcq"),
              json.dumps(data.get("options",[])), data.get("correct_answer","").strip(),
-             int(data.get("suggested_time",30)), question_id),
+             int(data.get("suggested_time",30)), max(1, int(data.get("marks",1))), question_id),
         )
         row = conn.execute("SELECT * FROM questions WHERE id=?", (question_id,)).fetchone()
     if not row:
@@ -473,10 +490,11 @@ def api_question_add():
         ).fetchone()[0]
         cur = conn.execute(
             """INSERT INTO questions
-               (session_id, text, type, options, correct_answer, suggested_time, order_index)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+               (session_id, text, type, options, correct_answer, suggested_time, order_index, marks)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
             (session_id, text, data.get("type","mcq"), json.dumps(data.get("options",[])),
-             data.get("correct_answer","").strip(), int(data.get("suggested_time",30)), max_order+1),
+             data.get("correct_answer","").strip(), int(data.get("suggested_time",30)), max_order+1,
+             max(1, int(data.get("marks", 1)))),
         )
         row = conn.execute("SELECT * FROM questions WHERE id=?", (cur.lastrowid,)).fetchone()
 
@@ -551,19 +569,31 @@ def api_results(session_id):
             ).fetchone()[0]
             answers = conn.execute(
                 """SELECT a.question_id, a.answer, a.is_correct, a.time_taken,
-                          q.text as question_text, q.correct_answer
+                          a.marks_awarded, a.ai_feedback,
+                          q.text as question_text, q.correct_answer, q.type, q.marks
                    FROM answers a
                    JOIN questions q ON q.id = a.question_id
                    WHERE a.student_id=?""",
                 (student["id"],),
             ).fetchall()
-            score = sum(1 for a in answers if a["is_correct"])
-            pct = round(score / assigned * 100, 1) if assigned > 0 else 0
+
+            mcq_score = sum(1 for a in answers if a["is_correct"] and a["type"] != "short_answer")
+            sa_score = sum(a["marks_awarded"] for a in answers
+                           if a["type"] == "short_answer" and a["marks_awarded"] is not None)
+            sa_max = sum(a["marks"] or 1 for a in answers if a["type"] == "short_answer")
+            total_pts = mcq_score + sa_score
+            max_pts = (assigned - sum(1 for a in answers if a["type"] == "short_answer")) + sa_max
+            pct = round(total_pts / max_pts * 100, 1) if max_pts > 0 else 0
+
             results.append({
                 "student_id": student["id"],
                 "name": student["name"],
                 "roll_no": student["roll_no"],
-                "score": score,
+                "score": mcq_score,
+                "sa_score": round(sa_score, 2),
+                "sa_max": sa_max,
+                "total_points": round(total_pts, 2),
+                "max_points": max_pts,
                 "total": assigned,
                 "percentage": pct,
                 "answers": [dict(a) for a in answers],
@@ -685,6 +715,117 @@ def api_hotspot_stop():
     return jsonify({"ok": True})
 
 
+@app.route("/api/questions/generate-from-document", methods=["POST"])
+@faculty_required
+def api_questions_generate_from_document():
+    """Generate questions from an uploaded PDF document."""
+    if "document" not in request.files:
+        return jsonify({"error": "No document file provided"}), 400
+    f = request.files["document"]
+    if not f.filename:
+        return jsonify({"error": "Empty filename"}), 400
+    if not f.filename.lower().endswith(".pdf"):
+        return jsonify({"error": "Only PDF files are supported"}), 400
+
+    session_id  = int(request.form.get("session_id", 0))
+    count       = max(1, min(50, int(request.form.get("count", 10))))
+    difficulty  = request.form.get("difficulty", "Medium")
+    bloom_level = request.form.get("bloom_level", "Mixed")
+    model       = request.form.get("model", "")
+    if not model:
+        return jsonify({"error": "Model is required"}), 400
+
+    try:
+        import pdfplumber
+        with pdfplumber.open(f) as pdf:
+            text = "\n".join(page.extract_text() or "" for page in pdf.pages)
+    except ImportError:
+        return jsonify({"error": "pdfplumber not installed. Run: pip install pdfplumber"}), 500
+    except Exception as e:
+        return jsonify({"error": f"Failed to read PDF: {e}"}), 400
+
+    if not text.strip():
+        return jsonify({"error": "Could not extract text from PDF. Use a text-based (non-scanned) PDF."}), 400
+
+    questions = ai_generator.generate_from_document(text, count, difficulty, bloom_level, model)
+    if questions is None:
+        return jsonify({"error": "Failed to generate questions. Is Ollama running?"}), 502
+
+    with get_db() as conn:
+        last = conn.execute(
+            "SELECT COALESCE(MAX(order_index), -1) FROM questions WHERE session_id=?", (session_id,)
+        ).fetchone()[0]
+        for idx, q in enumerate(questions):
+            conn.execute(
+                """INSERT INTO questions
+                   (session_id, text, type, options, correct_answer, suggested_time, order_index)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (session_id, q["text"], q["type"], json.dumps(q["options"]),
+                 q["correct_answer"], q["suggested_time"], last + 1 + idx),
+            )
+        rows = conn.execute(
+            "SELECT * FROM questions WHERE session_id=? ORDER BY order_index", (session_id,)
+        ).fetchall()
+
+    result = []
+    for row in rows:
+        r = dict(row)
+        r["options"] = json.loads(r["options"]) if r["options"] else []
+        result.append(r)
+    return jsonify({"questions": result})
+
+
+@app.route("/api/session/<int:session_id>/grade-short-answers", methods=["POST"])
+@faculty_required
+def api_grade_short_answers(session_id):
+    """Batch-grade all short-answer responses using Ollama after quiz ends."""
+    model = (request.get_json(force=True) or {}).get("model", "")
+    if not model:
+        return jsonify({"error": "Model is required"}), 400
+
+    with get_db() as conn:
+        questions = conn.execute(
+            "SELECT * FROM questions WHERE session_id=? AND type='short_answer'", (session_id,)
+        ).fetchall()
+        if not questions:
+            return jsonify({"ok": True, "graded": 0, "message": "No short-answer questions."})
+
+        grading_tasks = []
+        for q in questions:
+            responses = conn.execute(
+                """SELECT a.student_id, a.answer FROM answers a
+                   WHERE a.question_id=? AND a.answer IS NOT NULL AND a.answer != ''""",
+                (q["id"],),
+            ).fetchall()
+            if not responses:
+                continue
+            grading_tasks.append({
+                "question_id": q["id"],
+                "question_text": q["text"],
+                "expected_answer": q["correct_answer"] or "",
+                "marks": q["marks"] if q["marks"] else 1,
+                "image_url": q["image_url"],
+                "responses": [{"student_id": r["student_id"], "answer": r["answer"]} for r in responses],
+            })
+
+    if not grading_tasks:
+        return jsonify({"ok": True, "graded": 0, "message": "No answers to grade."})
+
+    results = ai_generator.grade_short_answers(grading_tasks, model)
+
+    graded_count = 0
+    with get_db() as conn:
+        for r in results:
+            conn.execute(
+                """UPDATE answers SET marks_awarded=?, ai_feedback=?
+                   WHERE student_id=? AND question_id=?""",
+                (r["marks_awarded"], r["feedback"], r["student_id"], r["question_id"]),
+            )
+            graded_count += 1
+
+    return jsonify({"ok": True, "graded": graded_count})
+
+
 @app.route("/api/questions/ai-chat", methods=["POST"])
 @faculty_required
 def api_ai_chat():
@@ -790,10 +931,10 @@ def handle_student_join(data):
         "option_seed": option_seed, "session_id": session_id,
     })
 
-    socketio.emit("student_joined", {
+    emit("student_joined", {
         "name": name, "roll_no": roll_no,
         "student_id": student_id, "count": count,
-    }, room=f"faculty_{session_id}")
+    }, to=f"faculty_{session_id}")
 
 
 @socketio.on("start_quiz")
@@ -883,13 +1024,16 @@ def handle_submit_answer(data):
 
     with get_db() as conn:
         question = conn.execute(
-            "SELECT correct_answer, session_id FROM questions WHERE id=?", (question_id,)
+            "SELECT correct_answer, session_id, type FROM questions WHERE id=?", (question_id,)
         ).fetchone()
         if not question:
             return
 
         session_id = question["session_id"]
-        is_correct = int(answer.lower() == question["correct_answer"].lower())
+        if question["type"] == "short_answer":
+            is_correct = 0  # pending AI grading
+        else:
+            is_correct = int(answer.lower() == (question["correct_answer"] or "").lower())
 
         conn.execute(
             """INSERT INTO answers (student_id, question_id, answer, is_correct, time_taken)
@@ -910,11 +1054,19 @@ def handle_submit_answer(data):
             "SELECT COUNT(*) FROM answers WHERE student_id=? AND is_correct=1", (student_id,)
         ).fetchone()[0]
 
-    emit("answer_confirmed", {
-        "question_id": question_id,
-        "is_correct": bool(is_correct),
-        "correct_answer": question["correct_answer"],
-    })
+    if question["type"] == "short_answer":
+        emit("answer_confirmed", {
+            "question_id": question_id,
+            "is_correct": None,
+            "correct_answer": None,
+            "pending_ai_grade": True,
+        })
+    else:
+        emit("answer_confirmed", {
+            "question_id": question_id,
+            "is_correct": bool(is_correct),
+            "correct_answer": question["correct_answer"],
+        })
 
     # Notify faculty live progress
     socketio.emit("student_progress", {
@@ -987,6 +1139,7 @@ def _force_end_quiz(session_id: int):
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
     init_db()
+    _migrate_db()
     print("=" * 60)
     print("  Quizzer — Classroom Quiz Server")
     print("=" * 60)

@@ -283,6 +283,163 @@ Rules:
     return [q for q in validated if q] or None
 
 
+def grade_short_answers(grading_tasks: list, model: str) -> list:
+    """
+    Grade short-answer responses using Ollama.
+
+    grading_tasks: list of {
+        question_id, question_text, expected_answer, marks, image_url,
+        responses: [{student_id, answer}]
+    }
+    Returns flat list of {question_id, student_id, marks_awarded, feedback}.
+    """
+    all_results = []
+
+    for task in grading_tasks:
+        qid = task["question_id"]
+        max_marks = task.get("marks", 1)
+        image_note = " (This question includes an image that students could see.)" if task.get("image_url") else ""
+
+        prompt = f"""You are a teacher grading student short-answer responses.
+
+Question: {task["question_text"]}{image_note}
+Model/Expected Answer: {task["expected_answer"]}
+Maximum marks: {max_marks}
+
+For each student response, award marks from 0 to {max_marks} (decimals like 0.5 allowed).
+Award full marks if the answer conveys the correct idea even if worded differently.
+Award partial marks for partially correct answers.
+
+Return ONLY a JSON array with no other text:
+[
+  {{"student_id": 1, "marks_awarded": {max_marks}, "feedback": "Correct."}},
+  {{"student_id": 2, "marks_awarded": 0, "feedback": "Did not address the question."}}
+]
+
+Student responses:
+{json.dumps([{"student_id": r["student_id"], "answer": r["answer"]} for r in task["responses"]], indent=2)}
+
+Return ONLY the JSON array:"""
+
+        try:
+            response = requests.post(
+                f"{OLLAMA_BASE_URL}/api/generate",
+                json={
+                    "model": model,
+                    "prompt": prompt,
+                    "stream": False,
+                    "options": {"temperature": 0.2, "num_predict": 2048},
+                },
+                timeout=120,
+            )
+            response.raise_for_status()
+            raw_text = response.json().get("response", "")
+            json_array = _extract_json_array(raw_text)
+            if json_array:
+                grades = json.loads(json_array)
+                if isinstance(grades, list):
+                    for g in grades:
+                        if isinstance(g, dict) and "student_id" in g:
+                            all_results.append({
+                                "question_id": qid,
+                                "student_id": int(g["student_id"]),
+                                "marks_awarded": min(max_marks, max(0.0, float(g.get("marks_awarded", 0)))),
+                                "feedback": str(g.get("feedback", "")).strip(),
+                            })
+                    continue
+        except Exception as exc:
+            print(f"[ai_generator] grade_short_answers error for q{qid}: {exc}")
+
+        # Fallback: award 0 marks for all responses in this question
+        for r in task["responses"]:
+            all_results.append({
+                "question_id": qid,
+                "student_id": r["student_id"],
+                "marks_awarded": 0.0,
+                "feedback": "Grading failed — please grade manually.",
+            })
+
+    return all_results
+
+
+def generate_from_document(text_content: str, count: int, difficulty: str, bloom_level: str, model: str):
+    """
+    Generate quiz questions from document text using Ollama.
+    Returns a list of validated question dicts or None on failure.
+    """
+    text_excerpt = text_content[:8000]
+
+    if bloom_level and bloom_level != "Mixed" and bloom_level in _BLOOM_DESCRIPTIONS:
+        bloom_instruction = (
+            f"All questions must target the Bloom's Taxonomy level: "
+            f"**{bloom_level}** — {_BLOOM_DESCRIPTIONS[bloom_level]}."
+        )
+    else:
+        levels = ", ".join(_BLOOM_DESCRIPTIONS.keys())
+        bloom_instruction = (
+            f"Distribute questions across Bloom's Taxonomy levels ({levels})."
+        )
+
+    prompt = f"""Based on the following document content, generate exactly {count} quiz questions at {difficulty} difficulty.
+
+{bloom_instruction}
+
+Document content:
+---
+{text_excerpt}
+---
+
+Return ONLY a valid JSON array with no additional text, markdown, or explanation.
+Each question must have exactly these fields:
+- "text": the question string
+- "type": either "mcq" or "truefalse"
+- "options": for mcq, exactly 4 distinct strings; for truefalse, exactly ["True", "False"]
+- "correct_answer": must match one option exactly (case-sensitive)
+- "suggested_time": integer seconds between 15 and 120
+
+Generate {count} questions from the document. Return ONLY the JSON array:"""
+
+    try:
+        response = requests.post(
+            f"{OLLAMA_BASE_URL}/api/generate",
+            json={
+                "model": model,
+                "prompt": prompt,
+                "stream": False,
+                "options": {"temperature": 0.7, "num_predict": 4096},
+            },
+            timeout=120,
+        )
+        response.raise_for_status()
+        raw_text = response.json().get("response", "")
+    except Exception as exc:
+        print(f"[ai_generator] generate_from_document request failed: {exc}")
+        return None
+
+    json_array = _extract_json_array(raw_text)
+    if json_array is None:
+        print(f"[ai_generator] generate_from_document: no JSON array in response: {raw_text[:300]}")
+        return None
+
+    try:
+        questions_raw = json.loads(json_array)
+    except json.JSONDecodeError:
+        return None
+
+    if not isinstance(questions_raw, list):
+        return None
+
+    validated = []
+    for i, q in enumerate(questions_raw):
+        valid = _validate_question(q, i)
+        if valid:
+            validated.append(valid)
+        if len(validated) >= count:
+            break
+
+    return validated if validated else None
+
+
 def get_available_models():
     """
     Return list of model name strings from Ollama, or None on failure.

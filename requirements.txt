@@ -3,3 +3,4 @@ flask-socketio>=5.3
 gevent>=23.9
 gevent-websocket>=0.10
 requests>=2.31
+pdfplumber>=0.10

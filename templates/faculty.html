@@ -86,6 +86,7 @@
   .q-type-tag { font-size: .68rem; font-weight: 700; padding: 2px 7px; border-radius: 999px; text-transform: uppercase; flex-shrink: 0; margin-top: 2px; }
   .q-type-tag.mcq { background: rgba(108,99,255,.2); color: var(--accent); }
   .q-type-tag.truefalse { background: rgba(34,197,94,.15); color: var(--green); }
+  .q-type-tag.short_answer { background: rgba(245,158,11,.15); color: var(--yellow); }
   .q-actions { margin-left: auto; display: flex; gap: .4rem; flex-shrink: 0; }
   .q-body { padding-left: 1.8rem; margin-top: .3rem; }
   .q-text { font-size: .88rem; line-height: 1.45; margin-bottom: .4rem; }
@@ -279,7 +280,11 @@
     </div>
 
     <div class="btn-row" style="margin-top:0">
-      <button class="btn btn-primary" id="btn-gen" onclick="handleGenerate()">Generate Questions</button>
+      <button class="btn btn-primary" id="btn-gen" onclick="handleGenerate()">Generate from Topic</button>
+      <label class="btn btn-ghost" id="btn-pdf" style="cursor:pointer">
+        Upload PDF
+        <input type="file" id="pdf-inp" accept=".pdf" style="display:none" onchange="handlePdfUpload(this)" />
+      </label>
       <button class="btn btn-ghost btn-sm" id="btn-add-q" onclick="openAddModal()" style="display:none">+ Add Manually</button>
     </div>
     <div id="gen-status" style="margin-top:.7rem;color:var(--muted);font-size:.85rem;display:none"></div>
@@ -443,9 +448,20 @@
   <div class="card">
     <div class="card-title">Quiz Results</div>
     <div style="color:var(--muted);font-size:.85rem;margin-bottom:1rem" id="results-meta"></div>
+
+    <!-- AI grading section (shown when short-answer questions exist) -->
+    <div id="grade-section" style="display:none;background:rgba(245,158,11,.07);border:1px solid rgba(245,158,11,.3);border-radius:10px;padding:1rem 1.25rem;margin-bottom:1rem">
+      <div style="font-size:.9rem;font-weight:600;color:var(--yellow);margin-bottom:.5rem">Short Answer Questions Detected</div>
+      <div style="font-size:.82rem;color:var(--muted);margin-bottom:.75rem">Grade short-answer responses with AI. Marks will update in the table below.</div>
+      <button class="btn btn-ghost btn-sm" id="btn-grade-ai" onclick="gradeWithAI()" style="border-color:var(--yellow);color:var(--yellow)">
+        Grade Short Answers with AI
+      </button>
+      <span id="grade-status" style="font-size:.82rem;color:var(--muted);margin-left:.75rem;display:none"></span>
+    </div>
+
     <div style="overflow-x:auto">
       <table class="results-table">
-        <thead><tr><th>Rank</th><th>Student</th><th>Roll No</th><th>Score</th><th>Percentage</th></tr></thead>
+        <thead><tr id="results-thead-row"><th>Rank</th><th>Student</th><th>Roll No</th><th>MCQ Score</th><th>AI Marks</th><th>Total</th><th>%</th></tr></thead>
         <tbody id="results-tbody"></tbody>
       </table>
     </div>
@@ -472,6 +488,7 @@
       <select id="mq-type" onchange="updateModalType()">
         <option value="mcq">Multiple Choice (MCQ)</option>
         <option value="truefalse">True / False</option>
+        <option value="short_answer">Short Answer (AI graded)</option>
       </select>
     </div>
     <div id="mq-mcq-fields">
@@ -491,6 +508,16 @@
       <div class="form-group">
         <label>Correct Answer</label>
         <select id="mq-correct-tf"><option>True</option><option>False</option></select>
+      </div>
+    </div>
+    <div id="mq-sa-fields" style="display:none">
+      <div class="form-group">
+        <label>Expected Answer (model answer — used for AI grading)</label>
+        <textarea id="mq-sa-expected" rows="3" placeholder="Describe the ideal answer…"></textarea>
+      </div>
+      <div class="form-group">
+        <label>Marks for this question</label>
+        <input type="number" id="mq-sa-marks" value="5" min="1" max="100" style="width:100px" />
       </div>
     </div>
     <div class="form-group" style="margin-top:.7rem">
@@ -724,17 +751,48 @@ function buildQCard(q, idx) {
          <input type="file" accept="image/*" style="display:none" onchange="uploadImg(${q.id},this)">
        </label>`;
 
-  const optRows = q.type === 'mcq'
-    ? (q.options||[]).map((o,i) =>
-        `<div class="opt-row${o===q.correct_answer?' correct-opt':''}"><span style="font-weight:700;margin-right:.3rem">${labels[i]||i+1}.</span>${escHtml(o)}${o===q.correct_answer?' ✓':''}</div>`
-      ).join('')
-    : `<div class="opt-row correct-opt">Answer: ${escHtml(q.correct_answer)}</div>`;
+  let optRows;
+  if (q.type === 'mcq') {
+    optRows = (q.options||[]).map((o,i) =>
+      `<div class="opt-row${o===q.correct_answer?' correct-opt':''}"><span style="font-weight:700;margin-right:.3rem">${labels[i]||i+1}.</span>${escHtml(o)}${o===q.correct_answer?' ✓':''}</div>`
+    ).join('');
+  } else if (q.type === 'short_answer') {
+    optRows = `<div style="font-size:.8rem;color:var(--yellow);margin-bottom:.2rem;font-weight:600">Expected answer:</div>
+               <div style="font-size:.82rem;color:var(--muted);font-style:italic">${escHtml(q.correct_answer||'(not set)')}</div>
+               <div style="font-size:.75rem;color:var(--muted);margin-top:.3rem">Max marks: <strong style="color:var(--yellow)">${q.marks||1}</strong></div>`;
+  } else {
+    optRows = `<div class="opt-row correct-opt">Answer: ${escHtml(q.correct_answer)}</div>`;
+  }
+
+  const typeLabel = q.type==='mcq' ? 'MCQ' : q.type==='short_answer' ? 'SA' : 'T/F';
+  const editFields = q.type === 'mcq' ? `
+    <div class="opts-grid">
+      ${(q.options||[]).map((o,i)=>`<div class="opt-inp"><span class="opt-lbl">${labels[i]}</span><input type="text" id="eo-${q.id}-${i}" value="${escHtml(o)}" /></div>`).join('')}
+    </div>
+    <div class="form-group">
+      <label>Correct Answer (exact text)</label>
+      <input type="text" id="ec-${q.id}" value="${escHtml(q.correct_answer)}" />
+    </div>`
+  : q.type === 'short_answer' ? `
+    <div class="form-group">
+      <label>Expected / Model Answer</label>
+      <textarea id="ec-${q.id}" rows="3">${escHtml(q.correct_answer||'')}</textarea>
+    </div>
+    <div class="form-group">
+      <label>Marks for this question</label>
+      <input type="number" id="em-${q.id}" value="${q.marks||1}" min="1" max="100" style="width:100px" />
+    </div>`
+  : `<div class="form-group"><label>Correct Answer</label>
+     <select id="ec-${q.id}">
+       <option${q.correct_answer==='True'?' selected':''}>True</option>
+       <option${q.correct_answer==='False'?' selected':''}>False</option>
+     </select></div>`;
 
   div.innerHTML = `
     <div class="q-card-top">
       <input type="checkbox" class="q-checkbox" id="chk-${q.id}" data-qid="${q.id}" onchange="onCardCheck()" />
       <div class="q-num">${idx+1}</div>
-      <span class="q-type-tag ${q.type}">${q.type==='mcq'?'MCQ':'T/F'}</span>
+      <span class="q-type-tag ${q.type}">${typeLabel}</span>
       <div class="q-actions">
         <button class="btn btn-ghost btn-sm" onclick="toggleEdit(${q.id})">Edit</button>
         <button class="btn btn-ghost btn-sm" style="color:var(--red);border-color:var(--red)" onclick="deleteQuestion(${q.id})">✕</button>
@@ -752,19 +810,7 @@ function buildQCard(q, idx) {
           <label>Question Text</label>
           <textarea id="et-${q.id}" rows="2">${escHtml(q.text)}</textarea>
         </div>
-        ${q.type==='mcq' ? `
-          <div class="opts-grid">
-            ${(q.options||[]).map((o,i)=>`<div class="opt-inp"><span class="opt-lbl">${labels[i]}</span><input type="text" id="eo-${q.id}-${i}" value="${escHtml(o)}" /></div>`).join('')}
-          </div>
-          <div class="form-group">
-            <label>Correct Answer (exact text)</label>
-            <input type="text" id="ec-${q.id}" value="${escHtml(q.correct_answer)}" />
-          </div>
-        ` : `<div class="form-group"><label>Correct Answer</label>
-          <select id="ec-${q.id}">
-            <option${q.correct_answer==='True'?' selected':''}>True</option>
-            <option${q.correct_answer==='False'?' selected':''}>False</option>
-          </select></div>`}
+        ${editFields}
         <div class="form-group">
           <label>Time limit for this question (sec)</label>
           <input type="number" id="et2-${q.id}" value="${q.suggested_time}" min="10" max="300" style="width:100px" />
@@ -838,11 +884,12 @@ async function saveEdit(qId, qType) {
   const text    = document.getElementById(`et-${qId}`).value.trim();
   const correct = document.getElementById(`ec-${qId}`).value.trim();
   const time    = parseInt(document.getElementById(`et2-${qId}`).value);
-  const opts    = qType==='mcq' ? [0,1,2,3].map(i=>(document.getElementById(`eo-${qId}-${i}`)?.value||'').trim()) : ['True','False'];
+  const opts    = qType==='mcq' ? [0,1,2,3].map(i=>(document.getElementById(`eo-${qId}-${i}`)?.value||'').trim()) : qType==='short_answer' ? [] : ['True','False'];
+  const marks   = qType==='short_answer' ? parseInt(document.getElementById(`em-${qId}`)?.value||1) : 1;
   try {
     const r = await fetch(`/api/questions/${qId}`, {
       method:'PUT', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ text, type:qType, options:opts, correct_answer:correct, suggested_time:time }),
+      body: JSON.stringify({ text, type:qType, options:opts, correct_answer:correct, suggested_time:time, marks }),
     });
     if (!r.ok) throw new Error('Save failed');
     const upd = await r.json();
@@ -881,6 +928,7 @@ async function handleProceedToLobby() {
   try {
     await fetch(`/api/session/${sessionId}/open-lobby`, { method:'POST' });
     openLobbyUI();
+    loadStudentsFromServer();
     toast('Lobby open — students can now connect.');
   } catch(e) { toast('Error: '+e.message); }
 }
@@ -892,6 +940,7 @@ function openLobbyUI() {
   document.getElementById('pi-qs').textContent = questions.length;
   activateStep('lobby');
   markTabDone('bank');
+  if (sessionId && socket) socket.emit('faculty_join', { session_id: sessionId });
 }
 
 async function loadStudentsFromServer() {
@@ -1014,6 +1063,67 @@ function extendTimer(minutes) {
 // Already handled via socket.on('timer_extended') — update quizEndAt
 // (socket listener added in initSocket)
 
+// ---- PDF upload → generate questions ----
+async function handlePdfUpload(inp) {
+  const file = inp.files[0];
+  if (!file) return;
+  const model = document.getElementById('model-sel').value;
+  if (!model) { toast('Select an Ollama model first.'); inp.value=''; return; }
+
+  const count = parseInt(document.getElementById('count-inp').value)||10;
+  const diff  = document.getElementById('diff-sel').value;
+  const bloom = document.getElementById('bloom-sel').value;
+
+  // Ensure session exists
+  if (!sessionId) {
+    const topicGuess = file.name.replace(/\.pdf$/i,'').replace(/_/g,' ');
+    document.getElementById('topic-inp').value = topicGuess;
+    const sr = await fetch('/api/session/create', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ topic: topicGuess }),
+    });
+    if (!sr.ok) { toast('Could not create session.'); inp.value=''; return; }
+    sessionId = (await sr.json()).session_id;
+    socket.emit('faculty_join', { session_id: sessionId });
+  }
+
+  const sta = document.getElementById('gen-status');
+  sta.style.display = 'block';
+  sta.textContent = `Reading "${file.name}" and generating ${count} questions…`;
+  const btn = document.getElementById('btn-pdf');
+  btn.style.pointerEvents = 'none';
+  btn.style.opacity = '.5';
+
+  const fd = new FormData();
+  fd.append('document', file);
+  fd.append('session_id', sessionId);
+  fd.append('count', count);
+  fd.append('difficulty', diff);
+  fd.append('bloom_level', bloom);
+  fd.append('model', model);
+
+  try {
+    const r = await fetch('/api/questions/generate-from-document', { method:'POST', body:fd });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Generation failed');
+    questions = data.questions;
+    sta.textContent = `✓ ${questions.length} question${questions.length!==1?'s':''} generated from PDF.`;
+    renderBank();
+    document.getElementById('bank-section').style.display = 'block';
+    document.getElementById('ai-chat-section').style.display = 'block';
+    document.getElementById('btn-add-q').style.display = 'inline-flex';
+    markTabDone('bank');
+    toast(`Generated ${questions.length} questions from "${file.name}".`);
+  } catch(e) {
+    sta.textContent = 'Error: ' + e.message;
+    toast('PDF generation error: ' + e.message, 6000);
+  } finally {
+    btn.style.pointerEvents = '';
+    btn.style.opacity = '';
+    inp.value = '';
+  }
+}
+
 // ---- AI Chat ----
 async function sendAiChat() {
   const inp = document.getElementById('ai-chat-inp');
@@ -1132,28 +1242,15 @@ function clearSuggestions() {
 }
 
 // ---- Results ----
+let _hasSAQuestions = false;
+
 async function fetchAndShowResults() {
   clearInterval(pollTimer);
   try {
     resultsData = await fetch(`/api/session/${sessionId}/results`).then(r=>r.json());
-    const tbody = document.getElementById('results-tbody');
-    tbody.innerHTML = '';
-    const medals = ['🥇','🥈','🥉'];
-    resultsData.forEach(r => {
-      const pct = r.percentage;
-      const col = pct>=70?'var(--green)':pct>=40?'var(--yellow)':'var(--red)';
-      const tr = document.createElement('tr');
-      tr.innerHTML = `
-        <td>${medals[r.rank-1]||'#'+r.rank}</td>
-        <td><strong>${escHtml(r.name)}</strong></td>
-        <td style="color:var(--muted)">${escHtml(r.roll_no)}</td>
-        <td>${r.score} / ${r.total}</td>
-        <td><div class="score-bar-wrap">
-          <div class="score-bar"><div class="score-bar-fill" style="width:${pct}%;background:${col}"></div></div>
-          <span style="font-size:.83rem;font-weight:600;color:${col}">${pct}%</span>
-        </div></td>`;
-      tbody.appendChild(tr);
-    });
+    _hasSAQuestions = questions.some(q => q.type === 'short_answer');
+    document.getElementById('grade-section').style.display = _hasSAQuestions ? 'block' : 'none';
+    renderResultsTable();
     document.getElementById('results-meta').textContent =
       `${resultsData.length} student${resultsData.length!==1?'s':''} · ${questions.length} questions`;
     activateStep('results');
@@ -1162,9 +1259,71 @@ async function fetchAndShowResults() {
   } catch(e) { toast('Failed to load results: '+e.message); }
 }
 
+function renderResultsTable() {
+  const tbody = document.getElementById('results-tbody');
+  tbody.innerHTML = '';
+  const medals = ['🥇','🥈','🥉'];
+  resultsData.forEach(r => {
+    const pct = r.percentage;
+    const col = pct>=70?'var(--green)':pct>=40?'var(--yellow)':'var(--red)';
+    const saCell = _hasSAQuestions
+      ? `<td>${r.sa_score !== undefined ? r.sa_score+' / '+r.sa_max : '—'}</td>`
+      : '<td style="display:none"></td>';
+    const tr = document.createElement('tr');
+    tr.id = `rr-${r.student_id}`;
+    tr.innerHTML = `
+      <td>${medals[r.rank-1]||'#'+r.rank}</td>
+      <td><strong>${escHtml(r.name)}</strong></td>
+      <td style="color:var(--muted)">${escHtml(r.roll_no)}</td>
+      <td>${r.score} / ${r.total - (r.sa_max > 0 ? resultsData[0]?.answers?.filter(a=>a.type==='short_answer').length||0 : 0)}</td>
+      ${saCell}
+      <td style="font-weight:700">${r.total_points} / ${r.max_points}</td>
+      <td><div class="score-bar-wrap">
+        <div class="score-bar"><div class="score-bar-fill" style="width:${pct}%;background:${col}"></div></div>
+        <span style="font-size:.83rem;font-weight:600;color:${col}">${pct}%</span>
+      </div></td>`;
+    tbody.appendChild(tr);
+  });
+  if (!_hasSAQuestions) {
+    document.getElementById('results-thead-row').querySelector('th:nth-child(5)').style.display = 'none';
+  }
+}
+
+async function gradeWithAI() {
+  const model = document.getElementById('model-sel').value;
+  if (!model) { toast('Select an Ollama model first.'); return; }
+  const btn = document.getElementById('btn-grade-ai');
+  const sta = document.getElementById('grade-status');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Grading…';
+  sta.textContent = 'AI is grading short answers…';
+  sta.style.display = 'inline';
+  try {
+    const r = await fetch(`/api/session/${sessionId}/grade-short-answers`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model }),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Grading failed');
+    sta.textContent = `✓ Graded ${data.graded} response${data.graded!==1?'s':''}.`;
+    toast('AI grading complete! Refreshing results…');
+    // Reload results with updated marks
+    resultsData = await fetch(`/api/session/${sessionId}/results`).then(res=>res.json());
+    renderResultsTable();
+  } catch(e) {
+    sta.textContent = 'Error: ' + e.message;
+    toast('Grading error: ' + e.message, 5000);
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = 'Grade Short Answers with AI';
+  }
+}
+
 function downloadCSV() {
-  const lines = ['Rank,Name,Roll No,Score,Total,Percentage'];
-  resultsData.forEach(r => lines.push(`${r.rank},"${r.name}","${r.roll_no}",${r.score},${r.total},${r.percentage}`));
+  const lines = ['Rank,Name,Roll No,MCQ Score,AI Marks,Total Points,Max Points,Percentage'];
+  resultsData.forEach(r => lines.push(
+    `${r.rank},"${r.name}","${r.roll_no}",${r.score},${r.sa_score||0},${r.total_points},${r.max_points},${r.percentage}`
+  ));
   const a = Object.assign(document.createElement('a'), {
     href: URL.createObjectURL(new Blob([lines.join('\n')], {type:'text/csv'})),
     download: 'quiz_results.csv',
@@ -1172,20 +1331,23 @@ function downloadCSV() {
   a.click();
 }
 
+
 // ---- Add manual question modal ----
 function openAddModal()  { document.getElementById('add-modal').classList.add('open'); }
 function closeAddModal() {
   document.getElementById('add-modal').classList.remove('open');
   clearModalImage();
-  ['mq-text','mq-a','mq-b','mq-c','mq-d','mq-correct-mcq'].forEach(id=>{ const el=document.getElementById(id); if(el) el.value=''; });
+  ['mq-text','mq-a','mq-b','mq-c','mq-d','mq-correct-mcq','mq-sa-expected'].forEach(id=>{ const el=document.getElementById(id); if(el) el.value=''; });
   document.getElementById('mq-time').value = '30';
+  document.getElementById('mq-sa-marks').value = '5';
   document.getElementById('mq-type').value = 'mcq';
   updateModalType();
 }
 function updateModalType() {
   const t = document.getElementById('mq-type').value;
-  document.getElementById('mq-mcq-fields').style.display = t==='mcq' ? 'block' : 'none';
-  document.getElementById('mq-tf-fields').style.display  = t==='truefalse' ? 'block' : 'none';
+  document.getElementById('mq-mcq-fields').style.display  = t==='mcq' ? 'block' : 'none';
+  document.getElementById('mq-tf-fields').style.display   = t==='truefalse' ? 'block' : 'none';
+  document.getElementById('mq-sa-fields').style.display   = t==='short_answer' ? 'block' : 'none';
 }
 function previewModalImage(inp) {
   const file = inp.files[0];
@@ -1207,12 +1369,17 @@ async function submitAddQuestion() {
   if (!sessionId) { toast('Create a session first.'); return; }
   const qType = document.getElementById('mq-type').value;
   const time  = parseInt(document.getElementById('mq-time').value)||30;
-  let opts, correct;
+  let opts, correct, marks = 1;
   if (qType==='mcq') {
     opts    = ['mq-a','mq-b','mq-c','mq-d'].map(id=>document.getElementById(id).value.trim());
     correct = document.getElementById('mq-correct-mcq').value.trim();
     if (opts.some(o=>!o)) { toast('All 4 options are required.'); return; }
     if (!opts.includes(correct)) { toast('Correct answer must exactly match one option.'); return; }
+  } else if (qType==='short_answer') {
+    opts    = [];
+    correct = document.getElementById('mq-sa-expected').value.trim();
+    marks   = parseInt(document.getElementById('mq-sa-marks').value)||5;
+    if (!correct) { toast('Expected answer is required for short-answer questions.'); return; }
   } else {
     opts    = ['True','False'];
     correct = document.getElementById('mq-correct-tf').value;
@@ -1220,7 +1387,7 @@ async function submitAddQuestion() {
   try {
     const r = await fetch('/api/questions/add', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ session_id:sessionId, text, type:qType, options:opts, correct_answer:correct, suggested_time:time }),
+      body: JSON.stringify({ session_id:sessionId, text, type:qType, options:opts, correct_answer:correct, suggested_time:time, marks }),
     });
     if (!r.ok) throw new Error('Failed');
     let newQ = await r.json();

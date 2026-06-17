@@ -291,10 +291,17 @@ function initSocket() {
     }
   });
 
-  socket.on('answer_confirmed', ({ question_id, is_correct, correct_answer }) => {
+  socket.on('answer_confirmed', ({ question_id, is_correct, correct_answer, pending_ai_grade }) => {
     answeredIds.add(question_id);
-    if (is_correct) correctCount++;
-    showFeedback(is_correct, correct_answer);
+    if (pending_ai_grade) {
+      const fb = document.getElementById('q-feedback');
+      fb.className = 'feedback show correct-fb';
+      fb.textContent = 'Answer submitted — your teacher will grade it after the quiz.';
+      setTimeout(() => { document.getElementById('btn-next').style.display = 'flex'; }, 600);
+    } else {
+      if (is_correct) correctCount++;
+      showFeedback(is_correct, correct_answer);
+    }
   });
 
   socket.on('quiz_ended', () => {
@@ -340,7 +347,6 @@ function renderQuestion(pos) {
 
   const total = myQuestions.length;
   document.getElementById('q-badge').textContent = `Q${pos+1} of ${total}`;
-  document.getElementById('q-type-lbl').textContent = q.type === 'mcq' ? 'Multiple Choice' : 'True / False';
   document.getElementById('q-text').textContent = q.text;
   document.getElementById('q-feedback').className = 'feedback';
   document.getElementById('btn-next').style.display = 'none';
@@ -358,22 +364,43 @@ function renderQuestion(pos) {
     imgEl.src = '';
   }
 
-  // Build options
+  // Build answer input area
   const optsList = document.getElementById('options-list');
   optsList.innerHTML = '';
   const keys = ['A','B','C','D'];
-  const displayOptions = q.type === 'mcq'
-    ? seededShuffle(q.options || [], myOptionSeed + q.id)
-    : ['True', 'False'];
 
-  displayOptions.forEach((opt, i) => {
-    const btn = document.createElement('button');
-    btn.className = 'opt-btn';
-    btn.dataset.value = opt;
-    btn.innerHTML = `<span class="opt-key">${keys[i]||i+1}</span><span>${escHtml(opt)}</span>`;
-    btn.addEventListener('click', () => selectAnswer(btn, q));
-    optsList.appendChild(btn);
-  });
+  if (q.type === 'short_answer') {
+    document.getElementById('q-type-lbl').textContent = 'Short Answer';
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'display:flex;flex-direction:column;gap:.65rem;';
+    const area = document.createElement('textarea');
+    area.id = 'sa-input';
+    area.placeholder = 'Type your answer here…';
+    area.rows = 4;
+    area.style.cssText = 'width:100%;background:var(--bg);border:2px solid var(--border);border-radius:12px;padding:.85rem 1rem;color:var(--text);font-size:.95rem;font-family:inherit;resize:vertical;outline:none;transition:border-color .2s;';
+    area.addEventListener('focus', () => { area.style.borderColor='var(--accent)'; });
+    area.addEventListener('blur',  () => { area.style.borderColor='var(--border)'; });
+    const submitBtn = document.createElement('button');
+    submitBtn.className = 'btn btn-primary';
+    submitBtn.textContent = 'Submit Answer';
+    submitBtn.addEventListener('click', () => submitShortAnswer(q, submitBtn, area));
+    wrap.appendChild(area);
+    wrap.appendChild(submitBtn);
+    optsList.appendChild(wrap);
+  } else {
+    document.getElementById('q-type-lbl').textContent = q.type === 'mcq' ? 'Multiple Choice' : 'True / False';
+    const displayOptions = q.type === 'mcq'
+      ? seededShuffle(q.options || [], myOptionSeed + q.id)
+      : ['True', 'False'];
+    displayOptions.forEach((opt, i) => {
+      const btn = document.createElement('button');
+      btn.className = 'opt-btn';
+      btn.dataset.value = opt;
+      btn.innerHTML = `<span class="opt-key">${keys[i]||i+1}</span><span>${escHtml(opt)}</span>`;
+      btn.addEventListener('click', () => selectAnswer(btn, q));
+      optsList.appendChild(btn);
+    });
+  }
 
   if (q.suggested_time && q.suggested_time > 0) {
     startPerQuestionTimer(q.suggested_time);
@@ -382,6 +409,23 @@ function renderQuestion(pos) {
   }
 
   perQStartTime = Date.now();
+}
+
+function submitShortAnswer(question, btn, area) {
+  const answer = area.value.trim();
+  if (!answer) { area.style.borderColor='var(--red)'; return; }
+  clearInterval(perQTimerInterval);
+  document.getElementById('q-timer-ring-wrap').style.display = 'none';
+  area.disabled = true;
+  btn.disabled = true;
+  btn.textContent = 'Submitted…';
+  const timeTaken = Math.round((Date.now() - perQStartTime) / 1000);
+  socket.emit('submit_answer', {
+    student_id: myStudentId,
+    question_id: question.id,
+    answer,
+    time_taken: timeTaken,
+  });
 }
 
 function selectAnswer(clickedBtn, question) {
@@ -481,7 +525,10 @@ function showDone() {
   document.getElementById('score-num').textContent = `${score}/${answered}`;
   document.getElementById('score-pct').textContent = `${pct}%`;
   document.getElementById('done-name').textContent = `Well done, ${myName}!`;
-  document.getElementById('done-sub').textContent = pct >= 80 ? 'Excellent work!' : pct >= 50 ? 'Good effort! Keep practicing.' : 'Keep studying — you can do it!';
+  const hasSA = myQuestions.some(q => q.type === 'short_answer');
+  document.getElementById('done-sub').textContent = hasSA
+    ? 'Short answer questions will be graded by your teacher — your score may increase.'
+    : (pct >= 80 ? 'Excellent work!' : pct >= 50 ? 'Good effort! Keep practicing.' : 'Keep studying — you can do it!');
   setState('done');
 }
 
