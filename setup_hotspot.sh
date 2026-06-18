@@ -74,6 +74,8 @@ driver=nl80211
 ssid=$SSID
 hw_mode=g
 channel=6
+ieee80211n=1
+ht_capab=[SHORT-GI-20][DSSS_CCK-40]
 wmm_enabled=1
 macaddr_acl=0
 auth_algs=1
@@ -82,6 +84,7 @@ wpa=2
 wpa_passphrase=$PASSPHRASE
 wpa_key_mgmt=WPA-PSK
 rsn_pairwise=CCMP
+max_num_sta=200
 HOSTAPD_EOF
 
 # ---- 7. Write dnsmasq config ----
@@ -89,13 +92,16 @@ echo "[*] Writing /tmp/quizzer_dnsmasq.conf…"
 cat > /tmp/quizzer_dnsmasq.conf <<DNSMASQ_EOF
 interface=$WIFI_IFACE
 bind-interfaces
-dhcp-range=$DHCP_RANGE,12h
+dhcp-range=$DHCP_RANGE,1h
+dhcp-lease-max=200
 dhcp-option=3,$SERVER_IP
 dhcp-option=6,$SERVER_IP
 # Resolve ALL domain names to this server — triggers captive portal detection
 address=/#/$SERVER_IP
 no-resolv
 no-poll
+no-hosts
+cache-size=0
 DNSMASQ_EOF
 
 # ---- 8. Start hostapd in background ----

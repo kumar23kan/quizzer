@@ -49,7 +49,8 @@ SERVER_IP   = "10.42.0.1"
 SERVER_PORT = int(os.environ.get("PORT", 80))
 QUIZ_URL    = f"http://{SERVER_IP}:{SERVER_PORT}/"
 
-socketio = SocketIO(app, async_mode="gevent", cors_allowed_origins="*")
+socketio = SocketIO(app, async_mode="gevent", cors_allowed_origins="*",
+                    ping_timeout=60, ping_interval=25)
 
 # Timer for global quiz end: {session_id: {'cancelled': bool}}
 _timers: dict = {}
