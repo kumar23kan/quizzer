@@ -48,6 +48,7 @@ else
 fi
 
 rm -f /tmp/quizzer_hostapd.conf /tmp/quizzer_dnsmasq.conf \
+      /tmp/quizzer_dnsmasq.leases \
       /tmp/quizzer_iface /tmp/quizzer_port /tmp/quizzer_preferred_conn
 
 echo ""

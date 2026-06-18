@@ -13,7 +13,8 @@ PASSPHRASE="${2:-quiz12345}"
 WIFI_IFACE="${3:-wlan0}"
 PORT="${4:-80}"
 SERVER_IP="10.42.0.1"
-DHCP_RANGE="10.42.0.10,10.42.0.200"
+DHCP_RANGE="10.42.0.10,10.42.0.250"
+LEASE_FILE="/tmp/quizzer_dnsmasq.leases"
 
 # Detect the kernel's regulatory domain so iPhones accept the AP.
 # Falls back to "00" (global/permissive) if iw is unavailable.
@@ -99,12 +100,16 @@ ap_max_inactivity=300
 HOSTAPD_EOF
 
 # ---- 7. Write dnsmasq config ----
+# Wipe stale leases from any previous session so the IP pool starts fresh.
+rm -f "$LEASE_FILE"
+
 echo "[*] Writing /tmp/quizzer_dnsmasq.conf…"
 cat > /tmp/quizzer_dnsmasq.conf <<DNSMASQ_EOF
 interface=$WIFI_IFACE
 bind-interfaces
-dhcp-range=$DHCP_RANGE,1h
-dhcp-lease-max=200
+dhcp-range=$DHCP_RANGE,20m
+dhcp-lease-max=250
+dhcp-leasefile=$LEASE_FILE
 dhcp-option=3,$SERVER_IP
 dhcp-option=6,$SERVER_IP
 # Resolve ALL domain names to this server — triggers captive portal detection
