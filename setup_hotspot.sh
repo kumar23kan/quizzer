@@ -144,7 +144,7 @@ iptables -A QUIZZER_INPUT -j DROP
 # Allow return traffic for established connections through FORWARD
 iptables -A FORWARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 # Allow forwarding from non-hotspot interfaces (faculty machine's own internet)
-iptables -A FORWARD -i "!" "$WIFI_IFACE" -j ACCEPT
+iptables -A FORWARD ! -i "$WIFI_IFACE" -j ACCEPT
 # DROP forwarding from hotspot subnet → no internet for students
 iptables -A FORWARD -s "${SERVER_IP%.*}.0/24" -j DROP
 
