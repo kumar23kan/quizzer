@@ -283,7 +283,12 @@ function setState(name) {
 }
 
 function initSocket() {
-  socket = io({ transports: ['websocket', 'polling'] });
+  socket = io({
+    transports: ['websocket', 'polling'],
+    reconnectionDelay: 500 + Math.random() * 1500,
+    reconnectionDelayMax: 8000,
+    randomizationFactor: 0.5,
+  });
 
   socket.on('connect', () => {
     if (myStudentId && SESSION_ID_live) {

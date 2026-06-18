@@ -85,6 +85,8 @@ wpa_passphrase=$PASSPHRASE
 wpa_key_mgmt=WPA-PSK
 rsn_pairwise=CCMP
 max_num_sta=200
+disassoc_low_ack=0
+ap_max_inactivity=1800
 HOSTAPD_EOF
 
 # ---- 7. Write dnsmasq config ----
@@ -102,6 +104,8 @@ no-resolv
 no-poll
 no-hosts
 cache-size=0
+dhcp-authoritative
+no-ping
 DNSMASQ_EOF
 
 # ---- 8. Start hostapd in background ----

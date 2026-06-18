@@ -66,6 +66,8 @@ def get_db():
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("PRAGMA busy_timeout=5000")   # wait up to 5 s on a locked DB
+    conn.execute("PRAGMA synchronous=NORMAL")  # safe with WAL, faster writes
     try:
         yield conn
         conn.commit()
@@ -1294,4 +1296,4 @@ if __name__ == "__main__":
     print(f"  Faculty password  : {FACULTY_PASSWORD}")
     print("=" * 60)
     port = int(os.environ.get("PORT", 80))
-    socketio.run(app, host="0.0.0.0", port=port, debug=False)
+    socketio.run(app, host="0.0.0.0", port=port, debug=False, backlog=512)
