@@ -15,6 +15,11 @@ PORT="${4:-80}"
 SERVER_IP="10.42.0.1"
 DHCP_RANGE="10.42.0.10,10.42.0.200"
 
+# Detect the kernel's regulatory domain so iPhones accept the AP.
+# Falls back to "00" (global/permissive) if iw is unavailable.
+COUNTRY=$(iw reg get 2>/dev/null | grep -o 'country [A-Z][A-Z]' | head -1 | awk '{print $2}')
+[ -z "$COUNTRY" ] && COUNTRY="00"
+
 # ---- 1. Must be root ----
 if [[ "$(id -u)" -ne 0 ]]; then
   echo "ERROR: This script must be run as root." >&2
@@ -75,15 +80,19 @@ ssid=$SSID
 hw_mode=g
 channel=6
 ieee80211n=1
-ht_capab=[SHORT-GI-20][DSSS_CCK-40]
+ht_capab=[SHORT-GI-20]
 wmm_enabled=1
 macaddr_acl=0
 auth_algs=1
 ignore_broadcast_ssid=0
+country_code=$COUNTRY
+ieee80211d=1
 wpa=2
 wpa_passphrase=$PASSPHRASE
 wpa_key_mgmt=WPA-PSK
+wpa_pairwise=CCMP TKIP
 rsn_pairwise=CCMP
+ieee80211w=0
 max_num_sta=200
 disassoc_low_ack=0
 ap_max_inactivity=1800
