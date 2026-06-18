@@ -1670,8 +1670,7 @@ let _hsIface   = 'wlan0';
 async function loadHotspotStatus() {
   try {
     const d = await fetch('/api/hotspot/status').then(r => r.json());
-    _hsRunning = d.running;
-    _hsIface   = d.interface || 'wlan0';
+    _hsIface = d.interface || 'wlan0';
     _applyHotspotUI(d);
   } catch(e) {
     document.getElementById('hs-label').textContent = 'Hotspot: unavailable';
@@ -1709,7 +1708,11 @@ function _applyHotspotUI(d) {
     btnStop.style.display = 'none';
     btnKick.style.display = 'none';
     urlHint.style.display = 'none';
+    // Clear student list whenever the hotspot is not running — covers both
+    // the Stop button flow and any external stop (manual teardown, page reload).
+    clearStudentList();
   }
+  _hsRunning = d.running;
 
   // Populate interface selector with detected interfaces
   if (d.interfaces?.length) {
@@ -1754,7 +1757,6 @@ async function startHotspot() {
     const data = await r.json();
     if (!r.ok) throw new Error(data.error || 'Failed');
 
-    _hsRunning = true;
     _hsIface = iface;
     _applyHotspotUI({ running: true, ssid, interface: iface, interfaces: [iface] });
     closeHotspotModal();
@@ -1784,7 +1786,6 @@ async function stopHotspot() {
     });
     const data = await r.json();
     if (!r.ok) throw new Error(data.error || 'Failed');
-    _hsRunning = false;
     _applyHotspotUI({ running: false, interfaces: [_hsIface] });
     toast('Hotspot stopped. Student list cleared.');
   } catch(e) {
