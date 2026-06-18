@@ -729,7 +729,10 @@ def api_hotspot_start():
 @app.route("/api/hotspot/stop", methods=["POST"])
 @faculty_required
 def api_hotspot_stop():
-    interface = (request.get_json(force=True) or {}).get("interface", "")
+    data      = request.get_json(force=True) or {}
+    interface = data.get("interface", "")
+    session_id = data.get("session_id")
+
     script = os.path.join(SCRIPT_DIR, "teardown_hotspot.sh")
     args = ["sudo", "bash", script]
     if interface:
@@ -741,6 +744,16 @@ def api_hotspot_stop():
 
     if result.returncode != 0:
         return jsonify({"error": result.stderr or "Stop failed"}), 500
+
+    # Clear all students so the lobby is fresh for the next deployment
+    if session_id:
+        with get_db() as conn:
+            conn.execute("DELETE FROM student_questions WHERE student_id IN "
+                         "(SELECT id FROM students WHERE session_id=?)", (session_id,))
+            conn.execute("DELETE FROM answers WHERE student_id IN "
+                         "(SELECT id FROM students WHERE session_id=?)", (session_id,))
+            conn.execute("DELETE FROM students WHERE session_id=?", (session_id,))
+        socketio.emit("students_cleared", {}, room=f"faculty_{session_id}")
 
     return jsonify({"ok": True})
 

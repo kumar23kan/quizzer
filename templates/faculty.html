@@ -677,6 +677,8 @@ function initSocket() {
     }
   });
 
+  socket.on('students_cleared', () => clearStudentList());
+
   socket.on('student_progress', ({ student_id, answered, assigned, correct, done }) => {
     progMap[student_id] = { ...progMap[student_id], answered, assigned, correct, done };
     updateProgRow(student_id);
@@ -1763,26 +1765,41 @@ async function startHotspot() {
 }
 
 async function stopHotspot() {
-  if (!confirm('Stop the hotspot? Connected students will be disconnected.')) return;
+  if (!confirm('Stop the hotspot? Connected students will be disconnected and removed from the lobby.')) return;
   const btn = document.getElementById('btn-hs-stop');
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span>';
   try {
     const r = await fetch('/api/hotspot/stop', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ interface: _hsIface }),
+      body: JSON.stringify({ interface: _hsIface, session_id: sessionId }),
     });
     const data = await r.json();
     if (!r.ok) throw new Error(data.error || 'Failed');
     _hsRunning = false;
     _applyHotspotUI({ running: false, interfaces: [_hsIface] });
-    toast('Hotspot stopped.');
+    clearStudentList();
+    toast('Hotspot stopped. Student list cleared.');
   } catch(e) {
     toast('Error stopping hotspot: ' + e.message, 5000);
   } finally {
     btn.disabled = false;
     btn.innerHTML = 'Stop Hotspot';
   }
+}
+
+function clearStudentList() {
+  document.getElementById('s-list').innerHTML = '';
+  document.getElementById('s-count').textContent = '0';
+  totalStudents = 0;
+  document.getElementById('pending-list').innerHTML = '';
+  document.getElementById('pending-count').textContent = '0';
+  document.getElementById('pending-section').style.display = 'none';
+  document.getElementById('pending-select-all').checked = false;
+  updateBulkButtons();
+  const btn = document.getElementById('btn-start');
+  btn.disabled = true;
+  btn.textContent = 'Start Quiz (waiting for students…)';
 }
 </script>
 </body>
