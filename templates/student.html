@@ -284,7 +284,7 @@ function setState(name) {
 
 function initSocket() {
   socket = io({
-    transports: ['websocket', 'polling'],
+    transports: ['polling', 'websocket'],
     reconnectionDelay: 500 + Math.random() * 1500,
     reconnectionDelayMax: 8000,
     randomizationFactor: 0.5,

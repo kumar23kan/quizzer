@@ -65,6 +65,7 @@
   .btn-success { background: var(--green); color: #000; }
   .btn-success:hover:not(:disabled) { background: #16a34a; }
   .btn-danger { background: var(--red); color: #fff; }
+  .btn-warning { background: var(--yellow); color: #000; }
   .btn-ghost { background: transparent; border: 1px solid var(--border); color: var(--muted); }
   .btn-ghost:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
   .btn-sm { padding: .35rem .75rem; font-size: .8rem; }
@@ -194,6 +195,7 @@
   </span>
   <span style="flex:1"></span>
   <button class="btn btn-ghost btn-sm" id="btn-hs-config" onclick="openHotspotModal()">Configure Hotspot</button>
+  <button class="btn btn-warning btn-sm" id="btn-hs-kick" style="display:none" onclick="kickAllFromHotspot()" title="Disconnect all devices (clears ghost connections)">Kick All Devices</button>
   <button class="btn btn-danger btn-sm" id="btn-hs-stop" style="display:none" onclick="stopHotspot()">Stop Hotspot</button>
 </div>
 
@@ -1680,8 +1682,9 @@ function _applyHotspotUI(d) {
   const dot    = document.getElementById('hs-dot');
   const label  = document.getElementById('hs-label');
   const badge  = document.getElementById('hs-ssid-badge');
-  const btnCfg = document.getElementById('btn-hs-config');
-  const btnStop= document.getElementById('btn-hs-stop');
+  const btnCfg  = document.getElementById('btn-hs-config');
+  const btnStop = document.getElementById('btn-hs-stop');
+  const btnKick = document.getElementById('btn-hs-kick');
 
   const urlHint = document.getElementById('hs-url-hint');
   const urlText = document.getElementById('hs-url-text');
@@ -1693,6 +1696,7 @@ function _applyHotspotUI(d) {
     badge.style.display = 'inline-block';
     btnCfg.style.display = 'none';
     btnStop.style.display = 'inline-flex';
+    btnKick.style.display = 'inline-flex';
     const port = d.port && d.port !== '80' ? `:${d.port}` : '';
     urlText.textContent = `10.42.0.1${port}`;
     urlHint.style.display = 'inline';
@@ -1703,6 +1707,7 @@ function _applyHotspotUI(d) {
     badge.style.display = 'none';
     btnCfg.style.display = 'inline-flex';
     btnStop.style.display = 'none';
+    btnKick.style.display = 'none';
     urlHint.style.display = 'none';
   }
 
@@ -1769,6 +1774,9 @@ async function stopHotspot() {
   const btn = document.getElementById('btn-hs-stop');
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span>';
+  // Clear the UI immediately so it stays clean even if the network
+  // drops before the server response arrives.
+  clearStudentList();
   try {
     const r = await fetch('/api/hotspot/stop', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -1778,13 +1786,27 @@ async function stopHotspot() {
     if (!r.ok) throw new Error(data.error || 'Failed');
     _hsRunning = false;
     _applyHotspotUI({ running: false, interfaces: [_hsIface] });
-    clearStudentList();
     toast('Hotspot stopped. Student list cleared.');
   } catch(e) {
     toast('Error stopping hotspot: ' + e.message, 5000);
   } finally {
     btn.disabled = false;
     btn.innerHTML = 'Stop Hotspot';
+  }
+}
+
+async function kickAllFromHotspot() {
+  if (!confirm('Disconnect all devices from the hotspot? (Clears ghost connections — students will need to reconnect.)')) return;
+  try {
+    const r = await fetch('/api/hotspot/kick-all', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ interface: _hsIface }),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Failed');
+    toast('All devices disconnected from hotspot.');
+  } catch(e) {
+    toast('Error: ' + e.message, 5000);
   }
 }
 

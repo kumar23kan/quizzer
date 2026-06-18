@@ -95,7 +95,7 @@ rsn_pairwise=CCMP
 ieee80211w=0
 max_num_sta=200
 disassoc_low_ack=0
-ap_max_inactivity=1800
+ap_max_inactivity=300
 HOSTAPD_EOF
 
 # ---- 7. Write dnsmasq config ----

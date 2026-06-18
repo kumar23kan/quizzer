@@ -10,6 +10,7 @@ import re
 import random
 import sqlite3
 import subprocess
+import textwrap
 import threading
 import uuid
 from contextlib import contextmanager
@@ -199,16 +200,24 @@ def _to_quiz():
     return redirect(QUIZ_URL, code=302)
 
 # iOS / macOS: return a page that meta-redirects; CNA opens it immediately.
+# iOS 14+ also probes via HTTPS — that will fail TLS (we're HTTP-only) and iOS
+# falls back to the HTTP probe handled here.  Returning 200 (not "Success") tells
+# iOS "there IS a captive portal", which causes CNA to open.
 def _ios_portal():
     html = (
         f'<html><head>'
+        f'<meta charset="UTF-8">'
         f'<meta http-equiv="refresh" content="0;url={QUIZ_URL}">'
-        f'</head><body>'
-        f'<a href="{QUIZ_URL}">Tap to open quiz</a>'
+        f'<meta name="viewport" content="width=device-width, initial-scale=1">'
+        f'</head><body style="font-family:system-ui;text-align:center;padding:40px">'
+        f'<h2>Classroom Quiz</h2>'
+        f'<p>Tap the link below to join:</p>'
+        f'<a href="{QUIZ_URL}" style="font-size:1.3rem;color:#6c63ff">Open Quiz &rarr;</a>'
         f'</body></html>'
     )
-    # Return 200 with redirect meta — iOS CNA opens this page directly.
-    return make_response(html, 200)
+    resp = make_response(html, 200)
+    resp.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    return resp
 
 _REDIRECT_PATHS = [
     "/generate_204",                          # Android / Chrome OS
@@ -733,6 +742,17 @@ def api_hotspot_stop():
     interface = data.get("interface", "")
     session_id = data.get("session_id")
 
+    # Clear students BEFORE teardown so the DB is clean even if the
+    # network drops before the response reaches the browser.
+    if session_id:
+        with get_db() as conn:
+            conn.execute("DELETE FROM student_questions WHERE student_id IN "
+                         "(SELECT id FROM students WHERE session_id=?)", (session_id,))
+            conn.execute("DELETE FROM answers WHERE student_id IN "
+                         "(SELECT id FROM students WHERE session_id=?)", (session_id,))
+            conn.execute("DELETE FROM students WHERE session_id=?", (session_id,))
+        socketio.emit("students_cleared", {}, room=f"faculty_{session_id}")
+
     script = os.path.join(SCRIPT_DIR, "teardown_hotspot.sh")
     args = ["sudo", "bash", script]
     if interface:
@@ -745,17 +765,40 @@ def api_hotspot_stop():
     if result.returncode != 0:
         return jsonify({"error": result.stderr or "Stop failed"}), 500
 
-    # Clear all students so the lobby is fresh for the next deployment
-    if session_id:
-        with get_db() as conn:
-            conn.execute("DELETE FROM student_questions WHERE student_id IN "
-                         "(SELECT id FROM students WHERE session_id=?)", (session_id,))
-            conn.execute("DELETE FROM answers WHERE student_id IN "
-                         "(SELECT id FROM students WHERE session_id=?)", (session_id,))
-            conn.execute("DELETE FROM students WHERE session_id=?", (session_id,))
-        socketio.emit("students_cleared", {}, room=f"faculty_{session_id}")
-
     return jsonify({"ok": True})
+
+
+@app.route("/api/hotspot/kick-all", methods=["POST"])
+@faculty_required
+def api_hotspot_kick_all():
+    """Deauthenticate all stations from the hotspot (clears ghost connections)."""
+    data = request.get_json(force=True) or {}
+    iface = data.get("interface", "").strip()
+    if not iface:
+        iface_file = "/tmp/quizzer_iface"
+        try:
+            with open(iface_file) as f:
+                iface = f.read().strip()
+        except OSError:
+            iface = "wlan0"
+
+    script = textwrap.dedent(f"""\
+        #!/bin/bash
+        iface={iface}
+        hostapd_cli -i "$iface" list_sta 2>/dev/null | while read -r mac; do
+            [ -n "$mac" ] && hostapd_cli -i "$iface" deauthenticate "$mac" >/dev/null 2>&1
+        done
+        echo "done"
+    """)
+    try:
+        result = subprocess.run(
+            ["sudo", "bash", "-c", script],
+            capture_output=True, text=True, timeout=10,
+        )
+    except subprocess.TimeoutExpired:
+        return jsonify({"error": "Kick timed out"}), 500
+
+    return jsonify({"ok": True, "output": result.stdout.strip()})
 
 
 @app.route("/api/questions/generate-from-document", methods=["POST"])
