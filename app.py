@@ -8,6 +8,7 @@ import json
 import os
 import re
 import random
+import socket as _socket
 import sqlite3
 import subprocess
 import textwrap
@@ -806,6 +807,51 @@ def api_hotspot_kick_all():
     return jsonify({"ok": True, "output": result.stdout.strip()})
 
 
+@app.route("/api/hotspot/fix-rules", methods=["POST"])
+@faculty_required
+def api_hotspot_fix_rules():
+    """Remove legacy 443-DNAT rule and install DROP rule on live hotspot."""
+    try:
+        with open("/tmp/quizzer_iface") as f:
+            iface = f.read().strip()
+    except OSError:
+        iface = "wlan0"
+    try:
+        with open("/tmp/quizzer_port") as f:
+            port = f.read().strip()
+    except OSError:
+        port = "5000"
+
+    server_ip = "10.42.0.1"
+    script = textwrap.dedent(f"""\
+        #!/bin/bash
+        iface={iface}
+        port={port}
+        sip={server_ip}
+        # Remove 443 DNAT if it exists (ignore error if already gone)
+        iptables -t nat -D PREROUTING -i "$iface" -p tcp --dport 443 \
+            -j DNAT --to-destination "$sip:$port" 2>/dev/null || true
+        # Add DROP rule for 443 if not already present
+        iptables -C FORWARD -i "$iface" -p tcp --dport 443 -j DROP 2>/dev/null || \
+            iptables -A FORWARD -i "$iface" -p tcp --dport 443 -j DROP
+        # Also drop 443 UDP (QUIC)
+        iptables -C FORWARD -i "$iface" -p udp --dport 443 -j DROP 2>/dev/null || \
+            iptables -A FORWARD -i "$iface" -p udp --dport 443 -j DROP
+        echo "ok"
+    """)
+    try:
+        result = subprocess.run(
+            ["sudo", "bash", "-c", script],
+            capture_output=True, text=True, timeout=10,
+        )
+    except subprocess.TimeoutExpired:
+        return jsonify({"error": "Timed out"}), 500
+
+    if result.returncode != 0:
+        return jsonify({"error": result.stderr.strip()}), 500
+    return jsonify({"ok": True, "output": result.stdout.strip()})
+
+
 @app.route("/api/questions/generate-from-document", methods=["POST"])
 @faculty_required
 def api_questions_generate_from_document():
@@ -955,6 +1001,7 @@ def handle_faculty_join(data):
     join_room(f"faculty_{session_id}")
     join_room(f"session_{session_id}")
     emit("faculty_joined", {"session_id": session_id})
+    print(f"[faculty_join] sid={request.sid} session={session_id}", flush=True)
 
     # Replay current student state so faculty never misses events that
     # arrived before the socket (re)connected — e.g. after a server restart
@@ -997,6 +1044,8 @@ def handle_student_join(data):
     name = (data.get("name") or "").strip()
     roll_no = (data.get("roll_no") or "").strip()
 
+    print(f"[student_join] name={name} roll={roll_no} session={session_id}", flush=True)
+
     if not name or not roll_no:
         emit("join_error", {"message": "Name and roll number are required."})
         return
@@ -1008,6 +1057,7 @@ def handle_student_join(data):
             ).fetchone()
 
             if not session_row or session_row["status"] not in ("lobby", "active"):
+                print(f"[student_join] REJECTED session={session_id} row={session_row}", flush=True)
                 emit("join_error", {"message": "Session is not accepting students right now."})
                 return
 
@@ -1067,6 +1117,7 @@ def handle_student_join(data):
                 return
 
             # New or pending — needs faculty approval
+            print(f"[student_join] emitting student_pending to room faculty_{session_id}", flush=True)
             emit("pending_approval", {"student_id": student_id, "name": name})
             socketio.emit("student_pending", {
                 "student_id": student_id,
@@ -1439,10 +1490,73 @@ def _clear_students_on_startup():
         conn.execute("DELETE FROM students")
 
 
+def _get_lan_ip():
+    """Return the laptop's LAN IP on the router network (excludes hotspot 10.42.x)."""
+    try:
+        s = _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        if not ip.startswith("10.42."):
+            return ip
+    except Exception:
+        pass
+    try:
+        out = subprocess.check_output(["ip", "-4", "addr"], text=True)
+        for line in out.split("\n"):
+            if "inet " in line and "10.42." not in line and "127." not in line:
+                return line.strip().split()[1].split("/")[0]
+    except Exception:
+        pass
+    return None
+
+
+@app.route("/api/network/info")
+@faculty_required
+def api_network_info():
+    port = int(os.environ.get("PORT", 80))
+    lan_ip = _get_lan_ip()
+    return jsonify({
+        "lan_ip": lan_ip,
+        "port": port,
+        "url": f"http://{lan_ip}:{port}" if lan_ip and port != 80 else (f"http://{lan_ip}" if lan_ip else None),
+    })
+
+
+def _fix_iptables_on_startup():
+    """If a hotspot session is already running, remove any legacy 443-DNAT rule."""
+    try:
+        with open("/tmp/quizzer_iface") as f:
+            iface = f.read().strip()
+        with open("/tmp/quizzer_port") as f:
+            srv_port = f.read().strip()
+    except OSError:
+        return  # no hotspot running, nothing to fix
+
+    server_ip = "10.42.0.1"
+    script = textwrap.dedent(f"""\
+        #!/bin/bash
+        iface={iface}
+        port={srv_port}
+        sip={server_ip}
+        iptables -t nat -D PREROUTING -i "$iface" -p tcp --dport 443 \
+            -j DNAT --to-destination "$sip:$port" 2>/dev/null || true
+        iptables -C FORWARD -i "$iface" -p tcp --dport 443 -j DROP 2>/dev/null || \
+            iptables -A FORWARD -i "$iface" -p tcp --dport 443 -j DROP
+        iptables -C FORWARD -i "$iface" -p udp --dport 443 -j DROP 2>/dev/null || \
+            iptables -A FORWARD -i "$iface" -p udp --dport 443 -j DROP
+        echo "iptables 443-DNAT removed"
+    """)
+    result = subprocess.run(["sudo", "bash", "-c", script],
+                            capture_output=True, text=True, timeout=10)
+    print(result.stdout.strip() or result.stderr.strip())
+
+
 if __name__ == "__main__":
     init_db()
     _migrate_db()
     _clear_students_on_startup()
+    _fix_iptables_on_startup()
     print("=" * 60)
     print("  Quizzer — Classroom Quiz Server")
     print("=" * 60)

@@ -229,6 +229,7 @@ const SESSION_ID = {{ session_id | tojson }};
 
 let myStudentId   = null;
 let myName        = '';
+let myRollNo      = '';
 let myOptionSeed  = 0;
 let myQuestions   = [];
 let answeredIds   = new Set();
@@ -291,11 +292,11 @@ function initSocket() {
   });
 
   socket.on('connect', () => {
-    if (myStudentId && SESSION_ID_live) {
+    if (myRollNo && SESSION_ID_live) {
       socket.emit('student_join', {
         session_id: SESSION_ID_live,
         name: myName,
-        roll_no: document.getElementById('inp-roll')?.value || '',
+        roll_no: myRollNo,
       });
     }
   });
@@ -444,6 +445,8 @@ function doJoin() {
   const roll_no = document.getElementById('inp-roll').value.trim();
   if (!name)    { showJoinError('Please enter your name.'); return; }
   if (!roll_no) { showJoinError('Please enter your roll number.'); return; }
+  myName   = name;
+  myRollNo = roll_no;
   hideJoinError();
   setBtn('btn-join', true, '<span class="spinner"></span> Joining…');
   socket.emit('student_join', { session_id: SESSION_ID_live, name, roll_no });

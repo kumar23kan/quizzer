@@ -148,11 +148,21 @@
   .modal-hdr { font-size: 1.05rem; font-weight: 700; margin-bottom: 1.1rem; display: flex; justify-content: space-between; align-items: center; }
   .modal-x { background: none; border: none; color: var(--muted); font-size: 1.2rem; cursor: pointer; }
 
-  /* ---- Hotspot bar ---- */
+  /* ---- Hotspot / Router bar ---- */
   .hs-bar { background: var(--surface); border-bottom: 1px solid var(--border); padding: .55rem 1.5rem; display: flex; align-items: center; gap: .85rem; flex-wrap: wrap; font-size: .83rem; position: sticky; top: 101px; z-index: 98; }
   .hs-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--red); display: inline-block; flex-shrink: 0; }
   .hs-dot.on { background: var(--green); }
   .hs-badge { background: rgba(108,99,255,.15); color: var(--accent); font-weight: 700; padding: 2px 10px; border-radius: 999px; font-size: .75rem; }
+  .mode-toggle { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; flex-shrink: 0; }
+  .mode-toggle button { background: none; border: none; padding: .25rem .7rem; font-size: .78rem; color: var(--muted); cursor: pointer; transition: background .15s, color .15s; }
+  .mode-toggle button.active { background: var(--accent); color: #fff; }
+  /* ---- Router WiFi panel ---- */
+  .router-panel { background: var(--surface); border-bottom: 1px solid var(--border); padding: .75rem 1.5rem; display: none; align-items: center; gap: 1.5rem; flex-wrap: wrap; position: sticky; top: 130px; z-index: 97; }
+  .router-panel.open { display: flex; }
+  .router-qr { background: #fff; padding: 6px; border-radius: 8px; line-height: 0; flex-shrink: 0; }
+  .router-url-block { display: flex; flex-direction: column; gap: .3rem; }
+  .router-url-label { font-size: .75rem; color: var(--muted); }
+  .router-url-text { font-size: 1.05rem; font-weight: 700; color: var(--accent); font-family: monospace; letter-spacing: .03em; }
 
   ::-webkit-scrollbar { width: 5px; } ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
   @media (max-width: 640px) { main { padding: 1rem; } .form-row { grid-template-columns: 1fr; } .opts-grid { grid-template-columns: 1fr; } }
@@ -184,20 +194,54 @@
   </div>
 </div>
 
-<!-- Hotspot status bar (always visible) -->
+<!-- Connection mode bar -->
 <div class="hs-bar" id="hs-bar">
-  <span class="hs-dot" id="hs-dot"></span>
-  <span id="hs-label" style="color:var(--muted)">Hotspot: checking…</span>
-  <span class="hs-badge" id="hs-ssid-badge" style="display:none"></span>
-  <span id="hs-url-hint" style="display:none;font-size:.75rem;color:var(--muted)">
-    Students: open browser → <strong style="color:var(--text)">any website</strong> → quiz opens automatically
-    &nbsp;|&nbsp; manual: <code style="color:var(--accent)" id="hs-url-text"></code>
+  <!-- Mode toggle -->
+  <div class="mode-toggle">
+    <button id="btn-mode-hotspot" onclick="setConnMode('hotspot')">Hotspot</button>
+    <button id="btn-mode-router" onclick="setConnMode('router')">Router WiFi</button>
+  </div>
+
+  <!-- Hotspot status (visible in hotspot mode) -->
+  <span id="hs-hotspot-section" style="display:inline-flex;align-items:center;gap:.85rem;flex-wrap:wrap">
+    <span class="hs-dot" id="hs-dot"></span>
+    <span id="hs-label" style="color:var(--muted)">Hotspot: checking…</span>
+    <span class="hs-badge" id="hs-ssid-badge" style="display:none"></span>
+    <span id="hs-url-hint" style="display:none;font-size:.75rem;color:var(--muted)">
+      Students: open browser → <strong style="color:var(--text)">any website</strong> → quiz opens automatically
+      &nbsp;|&nbsp; manual: <code style="color:var(--accent)" id="hs-url-text"></code>
+    </span>
   </span>
+
+  <!-- Router status (visible in router mode) -->
+  <span id="hs-router-section" style="display:none;align-items:center;gap:.6rem;font-size:.83rem">
+    <span class="hs-dot on"></span>
+    <span style="color:var(--green)">Router WiFi: Active</span>
+    <span style="color:var(--muted);font-size:.75rem">Students connect to your WiFi network and open:
+      <code style="color:var(--accent);margin-left:.3rem" id="router-url-inline">…</code>
+    </span>
+    <button class="btn btn-ghost btn-sm" onclick="toggleRouterPanel()" style="margin-left:.3rem">Show QR</button>
+  </span>
+
   <span style="flex:1"></span>
   <button class="btn btn-ghost btn-sm" id="btn-hs-config" onclick="openHotspotModal()">Configure Hotspot</button>
   <button class="btn btn-warning btn-sm" id="btn-hs-kick" style="display:none" onclick="kickAllFromHotspot()" title="Disconnect all devices (clears ghost connections)">Kick All Devices</button>
   <button class="btn btn-danger btn-sm" id="btn-hs-stop" style="display:none" onclick="stopHotspot()">Stop Hotspot</button>
 </div>
+
+<!-- Router WiFi QR panel (shown when in router mode and QR toggled) -->
+<div class="router-panel" id="router-panel">
+  <div class="router-qr" id="router-qr-canvas"></div>
+  <div class="router-url-block">
+    <div class="router-url-label">Tell students to connect to your WiFi, then open:</div>
+    <div class="router-url-text" id="router-url-display">detecting…</div>
+    <div style="font-size:.75rem;color:var(--muted);margin-top:.2rem">Or scan the QR code with their camera</div>
+  </div>
+  <button class="btn btn-ghost btn-sm" onclick="toggleRouterPanel()" style="margin-left:auto;align-self:flex-start">Close</button>
+</div>
+
+<!-- Include QR code library -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 
 <!-- Hotspot Config Modal -->
 <div class="modal-bg" id="hs-modal">
@@ -609,7 +653,13 @@ let socket;
 
 document.addEventListener('DOMContentLoaded', async () => {
   loadModels();
-  await loadHotspotStatus();   // must finish before loadStudentsFromServer checks _hsRunning
+  _applyConnModeUI();
+  if (_connMode === 'router') {
+    loadRouterInfo();
+    _hsRunning = true;
+  } else {
+    await loadHotspotStatus();   // must finish before loadStudentsFromServer checks _hsRunning
+  }
   initSocket();
 
   if (INIT) {
@@ -1689,6 +1739,64 @@ function toast(msg, dur=3500) {
 // ---- Util ----
 function escHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
+// ---- Connection mode (hotspot / router) ----
+let _connMode = localStorage.getItem('connMode') || 'hotspot';
+let _routerQR = null;
+let _routerPanelOpen = false;
+
+function setConnMode(mode) {
+  _connMode = mode;
+  localStorage.setItem('connMode', mode);
+  _applyConnModeUI();
+  if (mode === 'router') loadRouterInfo();
+}
+
+function _applyConnModeUI() {
+  document.getElementById('btn-mode-hotspot').classList.toggle('active', _connMode === 'hotspot');
+  document.getElementById('btn-mode-router').classList.toggle('active', _connMode === 'router');
+  document.getElementById('hs-hotspot-section').style.display = _connMode === 'hotspot' ? 'inline-flex' : 'none';
+  document.getElementById('hs-router-section').style.display  = _connMode === 'router'  ? 'inline-flex' : 'none';
+  // hotspot control buttons only in hotspot mode
+  if (_connMode === 'router') {
+    document.getElementById('btn-hs-config').style.display = 'none';
+    document.getElementById('btn-hs-stop').style.display   = 'none';
+    document.getElementById('btn-hs-kick').style.display   = 'none';
+    document.getElementById('router-panel').classList.remove('open');
+    _routerPanelOpen = false;
+  }
+  // router panel hidden when switching to hotspot
+  if (_connMode === 'hotspot') {
+    document.getElementById('router-panel').classList.remove('open');
+    _routerPanelOpen = false;
+  }
+  // in router mode the server is always reachable — treat as running
+  _hsRunning = _connMode === 'router' ? true : _hsRunning;
+}
+
+function toggleRouterPanel() {
+  _routerPanelOpen = !_routerPanelOpen;
+  document.getElementById('router-panel').classList.toggle('open', _routerPanelOpen);
+}
+
+async function loadRouterInfo() {
+  try {
+    const d = await fetch('/api/network/info').then(r => r.json());
+    if (!d.url) { document.getElementById('router-url-inline').textContent = 'IP not detected'; return; }
+    document.getElementById('router-url-inline').textContent  = d.url;
+    document.getElementById('router-url-display').textContent = d.url;
+    // Generate QR code (clear old one first)
+    const container = document.getElementById('router-qr-canvas');
+    container.innerHTML = '';
+    _routerQR = new QRCode(container, {
+      text: d.url, width: 160, height: 160,
+      colorDark: '#000000', colorLight: '#ffffff',
+      correctLevel: QRCode.CorrectLevel.M,
+    });
+  } catch(e) {
+    document.getElementById('router-url-inline').textContent = 'unavailable';
+  }
+}
+
 // ---- Hotspot ----
 let _hsRunning = false;
 let _hsIface   = 'wlan0';
@@ -1725,6 +1833,9 @@ function _applyHotspotUI(d) {
     const port = d.port && d.port !== '80' ? `:${d.port}` : '';
     urlText.textContent = `10.42.0.1${port}`;
     urlHint.style.display = 'inline';
+    // Silently fix any legacy iptables rules (443 DNAT → DROP) on a running hotspot
+    fetch('/api/hotspot/fix-rules', { method: 'POST', headers: { 'Content-Type': 'application/json' } })
+      .catch(() => {});
   } else {
     dot.className = 'hs-dot';
     label.textContent = 'Hotspot: Not running';
