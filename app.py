@@ -951,6 +951,34 @@ def handle_faculty_join(data):
     join_room(f"session_{session_id}")
     emit("faculty_joined", {"session_id": session_id})
 
+    # Replay current student state so faculty never misses events that
+    # arrived before the socket (re)connected — e.g. after a server restart
+    # or hotspot cycle where students reconnect faster than the faculty.
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT id, name, roll_no, status FROM students WHERE session_id=?",
+            (session_id,),
+        ).fetchall()
+
+    pending  = [r for r in rows if r["status"] == "pending"]
+    approved = [r for r in rows if r["status"] in ("approved", "submitted")]
+
+    # Send each pending student individually so the faculty UI adds them
+    # to the approval queue exactly as if they had just joined.
+    for r in pending:
+        emit("student_pending", {
+            "student_id": r["id"],
+            "name": r["name"],
+            "roll_no": r["roll_no"],
+        })
+
+    # Bulk-push approved/submitted students to restore the lobby count.
+    if approved:
+        emit("students_approved_bulk", {
+            "students": [{"name": r["name"], "roll_no": r["roll_no"]} for r in approved],
+            "count": len(approved),
+        })
+
 
 @socketio.on("reveal_answers")
 def handle_reveal_answers(data):
