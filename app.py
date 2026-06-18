@@ -57,26 +57,31 @@ socketio = SocketIO(app, async_mode="gevent", cors_allowed_origins="*",
 _timers: dict = {}
 _timers_lock = threading.Lock()
 
+# Serialise all SQLite writes through a single gevent-friendly lock.
+# SQLite's built-in busy_timeout uses a C-level sleep that blocks the
+# gevent event loop; this lock lets gevent yield while waiting instead.
+_db_write_lock = threading.Lock()
+
 
 # ---------------------------------------------------------------------------
 # Database helpers
 # ---------------------------------------------------------------------------
 @contextmanager
 def get_db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    conn.execute("PRAGMA busy_timeout=5000")   # wait up to 5 s on a locked DB
-    conn.execute("PRAGMA synchronous=NORMAL")  # safe with WAL, faster writes
-    try:
-        yield conn
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
+    with _db_write_lock:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute("PRAGMA synchronous=NORMAL")  # safe with WAL, faster writes
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
 
 def init_db():
@@ -996,77 +1001,81 @@ def handle_student_join(data):
         emit("join_error", {"message": "Name and roll number are required."})
         return
 
-    with get_db() as conn:
-        session_row = conn.execute(
-            "SELECT * FROM sessions WHERE id=?", (session_id,)
-        ).fetchone()
+    try:
+        with get_db() as conn:
+            session_row = conn.execute(
+                "SELECT * FROM sessions WHERE id=?", (session_id,)
+            ).fetchone()
 
-        if not session_row or session_row["status"] not in ("lobby", "active"):
-            emit("join_error", {"message": "Session is not accepting students right now."})
-            return
+            if not session_row or session_row["status"] not in ("lobby", "active"):
+                emit("join_error", {"message": "Session is not accepting students right now."})
+                return
 
-        existing = conn.execute(
-            "SELECT * FROM students WHERE session_id=? AND roll_no=?", (session_id, roll_no)
-        ).fetchone()
+            existing = conn.execute(
+                "SELECT * FROM students WHERE session_id=? AND roll_no=?", (session_id, roll_no)
+            ).fetchone()
 
-        if existing:
-            conn.execute("UPDATE students SET name=? WHERE id=?", (name, existing["id"]))
-            student_id = existing["id"]
-            option_seed = existing["option_seed"]
-            student_status = existing["status"] or "pending"
-            # Allow rejected students to re-request
-            if student_status == "rejected":
-                conn.execute("UPDATE students SET status='pending' WHERE id=?", (student_id,))
-                student_status = "pending"
-        else:
-            option_seed = random.randint(1, 2**31 - 1)
-            cur = conn.execute(
-                "INSERT INTO students (session_id, name, roll_no, option_seed, status) VALUES (?,?,?,?,?)",
-                (session_id, name, roll_no, option_seed, "pending"),
-            )
-            student_id = cur.lastrowid
-            student_status = "pending"
-
-        join_room(f"session_{session_id}")
-        join_room(f"student_{student_id}")
-
-        # Reconnect: already approved or submitted — skip approval queue
-        if student_status in ("approved", "submitted"):
-            approved_count = conn.execute(
-                "SELECT COUNT(*) FROM students WHERE session_id=? AND status IN ('approved','submitted')",
-                (session_id,),
-            ).fetchone()[0]
-            if session_row["status"] == "active":
-                questions, already_answered = _get_or_assign_questions(
-                    conn, student_id, session_id
-                )
-                emit("join_success", {
-                    "student_id": student_id, "name": name,
-                    "option_seed": option_seed, "session_id": session_id,
-                })
-                emit("quiz_started", {
-                    "questions": questions,
-                    "time_limit_seconds": session_row["time_limit_seconds"] or 1800,
-                    "answered_ids": already_answered,
-                })
+            if existing:
+                conn.execute("UPDATE students SET name=? WHERE id=?", (name, existing["id"]))
+                student_id = existing["id"]
+                option_seed = existing["option_seed"]
+                student_status = existing["status"] or "pending"
+                # Allow rejected students to re-request
+                if student_status == "rejected":
+                    conn.execute("UPDATE students SET status='pending' WHERE id=?", (student_id,))
+                    student_status = "pending"
             else:
-                emit("join_success", {
-                    "student_id": student_id, "name": name,
-                    "option_seed": option_seed, "session_id": session_id,
-                })
-                # Notify faculty so the lobby count stays accurate after reconnects
-                socketio.emit("student_rejoined", {
-                    "name": name, "roll_no": roll_no, "count": approved_count,
-                }, room=f"faculty_{session_id}")
-            return
+                option_seed = random.randint(1, 2**31 - 1)
+                cur = conn.execute(
+                    "INSERT INTO students (session_id, name, roll_no, option_seed, status) VALUES (?,?,?,?,?)",
+                    (session_id, name, roll_no, option_seed, "pending"),
+                )
+                student_id = cur.lastrowid
+                student_status = "pending"
 
-        # New or pending — needs faculty approval
-        emit("pending_approval", {"student_id": student_id, "name": name})
-        socketio.emit("student_pending", {
-            "student_id": student_id,
-            "name": name,
-            "roll_no": roll_no,
-        }, room=f"faculty_{session_id}")
+            join_room(f"session_{session_id}")
+            join_room(f"student_{student_id}")
+
+            # Reconnect: already approved or submitted — skip approval queue
+            if student_status in ("approved", "submitted"):
+                approved_count = conn.execute(
+                    "SELECT COUNT(*) FROM students WHERE session_id=? AND status IN ('approved','submitted')",
+                    (session_id,),
+                ).fetchone()[0]
+                if session_row["status"] == "active":
+                    questions, already_answered = _get_or_assign_questions(
+                        conn, student_id, session_id
+                    )
+                    emit("join_success", {
+                        "student_id": student_id, "name": name,
+                        "option_seed": option_seed, "session_id": session_id,
+                    })
+                    emit("quiz_started", {
+                        "questions": questions,
+                        "time_limit_seconds": session_row["time_limit_seconds"] or 1800,
+                        "answered_ids": already_answered,
+                    })
+                else:
+                    emit("join_success", {
+                        "student_id": student_id, "name": name,
+                        "option_seed": option_seed, "session_id": session_id,
+                    })
+                    # Notify faculty so the lobby count stays accurate after reconnects
+                    socketio.emit("student_rejoined", {
+                        "name": name, "roll_no": roll_no, "count": approved_count,
+                    }, room=f"faculty_{session_id}")
+                return
+
+            # New or pending — needs faculty approval
+            emit("pending_approval", {"student_id": student_id, "name": name})
+            socketio.emit("student_pending", {
+                "student_id": student_id,
+                "name": name,
+                "roll_no": roll_no,
+            }, room=f"faculty_{session_id}")
+    except Exception as exc:
+        print(f"[student_join] DB error for {name}/{roll_no}: {exc}")
+        emit("join_error", {"message": "Server busy — please tap Join again in a moment."})
 
 
 @socketio.on("approve_student")

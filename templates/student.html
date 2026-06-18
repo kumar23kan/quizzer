@@ -312,6 +312,11 @@ function initSocket() {
   socket.on('join_error', ({ message }) => {
     showJoinError(message);
     setBtn('btn-join', false, 'Join Quiz');
+    setState('join');
+    // Auto-retry once if server was busy
+    if (message && message.toLowerCase().includes('busy')) {
+      setTimeout(() => { if (!myStudentId) doJoin(); }, 2000);
+    }
   });
 
   socket.on('pending_approval', ({ student_id, name }) => {
