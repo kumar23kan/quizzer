@@ -373,6 +373,10 @@
       </div>
     </div>
 
+    <div id="pending-section" style="display:none;background:rgba(245,158,11,.07);border:1px solid rgba(245,158,11,.3);border-radius:10px;padding:1rem 1.25rem;margin-bottom:1.25rem">
+      <div style="font-size:.85rem;font-weight:600;color:var(--yellow);margin-bottom:.65rem">Pending Approval <span id="pending-count" style="background:rgba(245,158,11,.25);border-radius:999px;padding:1px 10px;font-size:.75rem;margin-left:.35rem">0</span></div>
+      <div id="pending-list" style="display:flex;flex-direction:column;gap:.45rem"></div>
+    </div>
     <div class="s-list" id="s-list"></div>
   </div>
 
@@ -465,6 +469,13 @@
         <tbody id="results-tbody"></tbody>
       </table>
     </div>
+    <div style="margin-top:1rem;background:rgba(34,197,94,.07);border:1px solid rgba(34,197,94,.3);border-radius:10px;padding:1rem 1.25rem">
+      <div style="font-size:.9rem;font-weight:600;color:var(--green);margin-bottom:.35rem">Reveal Answers to Students</div>
+      <div style="font-size:.82rem;color:var(--muted);margin-bottom:.75rem">Students on the quiz-complete screen will see their per-question results with correct answers.</div>
+      <button class="btn btn-ghost btn-sm" id="btn-reveal-answers" onclick="revealAnswers()" style="border-color:var(--green);color:var(--green)">
+        Reveal Answers
+      </button>
+    </div>
     <div class="btn-row">
       <button class="btn btn-primary" onclick="downloadCSV()">Download CSV</button>
       <button class="btn btn-ghost" onclick="location.reload()">New Quiz</button>
@@ -474,6 +485,21 @@
 
 </main>
 
+<div id="retake-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:999;align-items:center;justify-content:center">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:1.75rem;max-width:400px;width:92%;margin:1rem">
+    <div style="font-size:1rem;font-weight:700;margin-bottom:.35rem">Allow Retake</div>
+    <div style="font-size:.85rem;color:var(--muted);margin-bottom:1.25rem" id="retake-modal-name"></div>
+    <div style="display:flex;flex-direction:column;gap:.65rem;margin-bottom:1rem">
+      <button onclick="doRetake('same')" style="padding:.8rem 1rem;border-radius:10px;border:2px solid var(--accent);background:rgba(108,99,255,.08);color:var(--accent);font-weight:600;cursor:pointer;text-align:left">
+        Same Quiz — Reshuffled Options<br><span style="font-size:.78rem;font-weight:400;color:var(--muted)">Same questions, new answer order</span>
+      </button>
+      <button onclick="doRetake('new')" style="padding:.8rem 1rem;border-radius:10px;border:2px solid var(--green);background:rgba(34,197,94,.08);color:var(--green);font-weight:600;cursor:pointer;text-align:left">
+        New Question Set<br><span style="font-size:.78rem;font-weight:400;color:var(--muted)">Fresh draw from the question bank</span>
+      </button>
+    </div>
+    <button onclick="closeRetakeModal()" style="width:100%;padding:.7rem;border-radius:10px;border:1px solid var(--border);background:transparent;color:var(--muted);cursor:pointer;font-size:.9rem">Cancel</button>
+  </div>
+</div>
 
 <!-- Add Question Modal -->
 <div class="modal-bg" id="add-modal">
@@ -604,6 +630,28 @@ function initSocket() {
     btn.disabled = false;
     btn.textContent = `Start Quiz  (${count} student${count !== 1 ? 's' : ''} ready)`;
     document.getElementById('pi-total').textContent = count;
+  });
+
+  socket.on('student_pending', ({ student_id, name, roll_no }) => {
+    addPendingRow(student_id, name, roll_no);
+  });
+
+  socket.on('student_approved', ({ student_id, name, roll_no, count }) => {
+    removePendingRow(student_id);
+    totalStudents = count;
+    document.getElementById('s-count').textContent = count;
+    appendStudentChip(name, roll_no);
+    const btn = document.getElementById('btn-start');
+    btn.disabled = false;
+    btn.textContent = `Start Quiz  (${count} student${count !== 1 ? 's' : ''} ready)`;
+    document.getElementById('pi-total').textContent = count;
+  });
+
+  socket.on('student_submitted', ({ student_id }) => {
+    if (progMap[student_id]) {
+      progMap[student_id].submitted = true;
+      updateProgRow(student_id);
+    }
   });
 
   socket.on('student_progress', ({ student_id, answered, assigned, correct, done }) => {
@@ -1025,16 +1073,21 @@ function updateProgRow(sid) {
     row.id = `pr-${sid}`;
     document.getElementById('prog-tbody').appendChild(row);
   }
-  const pct = p.assigned > 0 ? Math.round(p.answered/p.assigned*100) : 0;
+  const pct = p.assigned > 0 ? Math.round(p.answered / p.assigned * 100) : 0;
+  const statusCell = p.submitted
+    ? `<span class="done-tag">Submitted</span> <button onclick="showRetakeModal(${sid}, '${escHtml(p.name)}')" style="margin-left:.4rem;padding:2px 8px;border-radius:6px;border:1px solid var(--accent);background:transparent;color:var(--accent);font-size:.72rem;cursor:pointer">Retake</button>`
+    : p.done
+      ? '<span class="done-tag">Done</span>'
+      : `<span style="font-size:.78rem;color:var(--muted)">${pct}%</span>`;
   row.innerHTML = `
     <td><strong>${escHtml(p.name)}</strong></td>
-    <td style="color:var(--muted)">${escHtml(p.roll_no||'')}</td>
+    <td style="color:var(--muted)">${escHtml(p.roll_no || '')}</td>
     <td><div class="prog-bar-wrap">
       <div class="prog-bar"><div class="prog-bar-fill" style="width:${pct}%"></div></div>
-      <span style="font-size:.78rem;color:var(--muted);white-space:nowrap">${p.answered||0}/${p.assigned||'?'}</span>
+      <span style="font-size:.78rem;color:var(--muted);white-space:nowrap">${p.answered || 0}/${p.assigned || '?'}</span>
     </div></td>
-    <td style="font-weight:600">${p.correct||0} / ${p.answered||0}</td>
-    <td>${p.done ? '<span class="done-tag">Done</span>' : `<span style="font-size:.78rem;color:var(--muted)">${pct}%</span>`}</td>`;
+    <td style="font-weight:600">${p.correct || 0} / ${p.answered || 0}</td>
+    <td>${statusCell}</td>`;
 }
 
 // ---- End quiz ----
@@ -1319,6 +1372,15 @@ async function gradeWithAI() {
   }
 }
 
+function revealAnswers() {
+  if (!sessionId) return;
+  socket.emit('reveal_answers', { session_id: sessionId });
+  const btn = document.getElementById('btn-reveal-answers');
+  btn.disabled = true;
+  btn.textContent = 'Answers Revealed ✓';
+  toast('Answers revealed to all students.');
+}
+
 function downloadCSV() {
   const lines = ['Rank,Name,Roll No,MCQ Score,AI Marks,Total Points,Max Points,Percentage'];
   resultsData.forEach(r => lines.push(
@@ -1419,6 +1481,68 @@ function appendStudentChip(name, roll) {
   c.className = 's-chip';
   c.innerHTML = `<div class="s-av">${escHtml((name[0]||'?').toUpperCase())}</div><span>${escHtml(name)}</span><span class="s-roll">${escHtml(roll)}</span>`;
   document.getElementById('s-list').appendChild(c);
+}
+
+function addPendingRow(studentId, name, roll) {
+  const existing = document.getElementById(`pend-${studentId}`);
+  if (existing) return;
+  const section = document.getElementById('pending-section');
+  section.style.display = '';
+  const row = document.createElement('div');
+  row.id = `pend-${studentId}`;
+  row.style.cssText = 'display:flex;align-items:center;gap:.65rem;padding:.5rem .65rem;background:var(--surface2);border-radius:8px';
+  row.innerHTML = `<div class="s-av">${escHtml((name[0]||'?').toUpperCase())}</div>
+    <span style="flex:1;font-size:.875rem">${escHtml(name)}</span>
+    <span style="font-size:.78rem;color:var(--muted)">${escHtml(roll)}</span>
+    <button onclick="approveStudent(${studentId})" style="padding:3px 10px;border-radius:6px;border:1px solid var(--green);background:transparent;color:var(--green);font-size:.78rem;cursor:pointer;font-weight:600">Approve</button>
+    <button onclick="rejectStudent(${studentId})" style="padding:3px 10px;border-radius:6px;border:1px solid var(--red);background:transparent;color:var(--red);font-size:.78rem;cursor:pointer">Reject</button>`;
+  document.getElementById('pending-list').appendChild(row);
+  const cnt = document.getElementById('pending-count');
+  cnt.textContent = parseInt(cnt.textContent || '0') + 1;
+}
+
+function removePendingRow(studentId) {
+  const row = document.getElementById(`pend-${studentId}`);
+  if (!row) return;
+  row.remove();
+  const list = document.getElementById('pending-list');
+  const cnt = document.getElementById('pending-count');
+  const n = Math.max(0, parseInt(cnt.textContent || '1') - 1);
+  cnt.textContent = n;
+  if (n === 0) document.getElementById('pending-section').style.display = 'none';
+}
+
+function approveStudent(studentId) {
+  socket.emit('approve_student', { student_id: studentId, session_id: sessionId });
+  removePendingRow(studentId);
+}
+
+function rejectStudent(studentId) {
+  socket.emit('reject_student', { student_id: studentId, session_id: sessionId });
+  removePendingRow(studentId);
+}
+
+let _retakeStudentId = null;
+function showRetakeModal(studentId, studentName) {
+  _retakeStudentId = studentId;
+  document.getElementById('retake-modal-name').textContent = `Student: ${studentName}`;
+  document.getElementById('retake-modal').style.display = 'flex';
+}
+function closeRetakeModal() {
+  document.getElementById('retake-modal').style.display = 'none';
+  _retakeStudentId = null;
+}
+function doRetake(type) {
+  if (!_retakeStudentId || !sessionId) return;
+  socket.emit('allow_retake', { student_id: _retakeStudentId, session_id: sessionId, retake_type: type });
+  if (progMap[_retakeStudentId]) {
+    progMap[_retakeStudentId].submitted = false;
+    progMap[_retakeStudentId].done = false;
+    progMap[_retakeStudentId].answered = 0;
+    updateProgRow(_retakeStudentId);
+  }
+  closeRetakeModal();
+  toast('Retake granted.');
 }
 
 // ---- Tab navigation ----

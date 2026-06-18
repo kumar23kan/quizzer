@@ -109,6 +109,7 @@ def init_db():
                 roll_no TEXT NOT NULL,
                 device_id TEXT,
                 option_seed INTEGER,
+                status TEXT DEFAULT 'pending',
                 joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (session_id) REFERENCES sessions(id)
             );
@@ -147,6 +148,7 @@ def _migrate_db():
             "ALTER TABLE questions ADD COLUMN marks INTEGER DEFAULT 1",
             "ALTER TABLE answers ADD COLUMN marks_awarded REAL DEFAULT NULL",
             "ALTER TABLE answers ADD COLUMN ai_feedback TEXT DEFAULT NULL",
+            "ALTER TABLE students ADD COLUMN status TEXT DEFAULT 'pending'",
         ]:
             try:
                 conn.execute(ddl)
@@ -529,7 +531,8 @@ def api_progress(session_id):
     """Live progress: per-student answered count vs assigned count."""
     with get_db() as conn:
         students = conn.execute(
-            "SELECT id, name, roll_no FROM students WHERE session_id=?", (session_id,)
+            "SELECT id, name, roll_no, status FROM students WHERE session_id=? AND status IN ('approved','submitted')",
+            (session_id,),
         ).fetchall()
         progress = []
         for s in students:
@@ -550,6 +553,7 @@ def api_progress(session_id):
                 "answered": answered,
                 "correct": correct,
                 "done": assigned > 0 and answered >= assigned,
+                "status": s["status"] or "approved",
             })
     return jsonify(progress)
 
@@ -604,6 +608,29 @@ def api_results(session_id):
             r["rank"] = rank
 
     return jsonify(results)
+
+
+@app.route("/api/session/<int:session_id>/my-answers/<int:student_id>", methods=["GET"])
+def api_my_answers(session_id, student_id):
+    with get_db() as conn:
+        answers = conn.execute(
+            """SELECT a.question_id, a.answer AS your_answer, a.is_correct,
+                      a.marks_awarded, a.ai_feedback,
+                      q.text AS question_text, q.correct_answer, q.type, q.marks
+               FROM answers a
+               JOIN questions q ON q.id = a.question_id
+               JOIN student_questions sq ON sq.question_id = q.id AND sq.student_id = a.student_id
+               WHERE a.student_id=?
+               ORDER BY sq.position""",
+            (student_id,),
+        ).fetchall()
+
+    mcq_answers = [a for a in answers if a["type"] != "short_answer"]
+    return jsonify({
+        "answers": [dict(a) for a in answers],
+        "mcq_correct": sum(1 for a in mcq_answers if a["is_correct"]),
+        "mcq_total": len(mcq_answers),
+    })
 
 
 @app.route("/api/models", methods=["GET"])
@@ -866,6 +893,12 @@ def handle_faculty_join(data):
     emit("faculty_joined", {"session_id": session_id})
 
 
+@socketio.on("reveal_answers")
+def handle_reveal_answers(data):
+    session_id = int(data.get("session_id", 0))
+    socketio.emit("answers_revealed", {}, room=f"session_{session_id}")
+
+
 @socketio.on("student_join")
 def handle_student_join(data):
     session_id = int(data.get("session_id", 0))
@@ -893,48 +926,166 @@ def handle_student_join(data):
             conn.execute("UPDATE students SET name=? WHERE id=?", (name, existing["id"]))
             student_id = existing["id"]
             option_seed = existing["option_seed"]
+            student_status = existing["status"] or "pending"
+            # Allow rejected students to re-request
+            if student_status == "rejected":
+                conn.execute("UPDATE students SET status='pending' WHERE id=?", (student_id,))
+                student_status = "pending"
         else:
             option_seed = random.randint(1, 2**31 - 1)
             cur = conn.execute(
-                "INSERT INTO students (session_id, name, roll_no, option_seed) VALUES (?,?,?,?)",
-                (session_id, name, roll_no, option_seed),
+                "INSERT INTO students (session_id, name, roll_no, option_seed, status) VALUES (?,?,?,?,?)",
+                (session_id, name, roll_no, option_seed, "pending"),
             )
             student_id = cur.lastrowid
+            student_status = "pending"
 
+        join_room(f"session_{session_id}")
+        join_room(f"student_{student_id}")
+
+        # Reconnect: already approved or submitted — skip approval
+        if student_status in ("approved", "submitted"):
+            if session_row["status"] == "active":
+                questions, already_answered = _get_or_assign_questions(
+                    conn, student_id, session_id
+                )
+                emit("join_success", {
+                    "student_id": student_id, "name": name,
+                    "option_seed": option_seed, "session_id": session_id,
+                })
+                emit("quiz_started", {
+                    "questions": questions,
+                    "time_limit_seconds": session_row["time_limit_seconds"] or 1800,
+                    "answered_ids": already_answered,
+                })
+            else:
+                emit("join_success", {
+                    "student_id": student_id, "name": name,
+                    "option_seed": option_seed, "session_id": session_id,
+                })
+            return
+
+        # New or pending — needs faculty approval
+        emit("pending_approval", {"student_id": student_id, "name": name})
+        socketio.emit("student_pending", {
+            "student_id": student_id,
+            "name": name,
+            "roll_no": roll_no,
+        }, room=f"faculty_{session_id}")
+
+
+@socketio.on("approve_student")
+def handle_approve_student(data):
+    student_id = int(data.get("student_id", 0))
+    session_id = int(data.get("session_id", 0))
+
+    with get_db() as conn:
+        conn.execute("UPDATE students SET status='approved' WHERE id=?", (student_id,))
+        student = conn.execute("SELECT * FROM students WHERE id=?", (student_id,)).fetchone()
+        session_row = conn.execute("SELECT * FROM sessions WHERE id=?", (session_id,)).fetchone()
+        if not student or not session_row:
+            return
         count = conn.execute(
-            "SELECT COUNT(*) FROM students WHERE session_id=?", (session_id,)
+            "SELECT COUNT(*) FROM students WHERE session_id=? AND status='approved'",
+            (session_id,),
         ).fetchone()[0]
 
-        # If quiz already started, assign questions immediately and send them
         if session_row["status"] == "active":
-            questions, already_answered = _get_or_assign_questions(
-                conn, student_id, session_id
-            )
-            join_room(f"session_{session_id}")
-            join_room(f"student_{student_id}")
-            emit("join_success", {
-                "student_id": student_id, "name": name,
-                "option_seed": option_seed, "session_id": session_id,
-            })
-            emit("quiz_started", {
+            questions, already_answered = _get_or_assign_questions(conn, student_id, session_id)
+            socketio.emit("join_success", {
+                "student_id": student_id, "name": student["name"],
+                "option_seed": student["option_seed"], "session_id": session_id,
+            }, room=f"student_{student_id}")
+            socketio.emit("quiz_started", {
                 "questions": questions,
                 "time_limit_seconds": session_row["time_limit_seconds"] or 1800,
                 "answered_ids": already_answered,
-            })
-            return
+            }, room=f"student_{student_id}")
+        else:
+            socketio.emit("join_success", {
+                "student_id": student_id, "name": student["name"],
+                "option_seed": student["option_seed"], "session_id": session_id,
+            }, room=f"student_{student_id}")
 
-    join_room(f"session_{session_id}")
-    join_room(f"student_{student_id}")
+    socketio.emit("student_approved", {
+        "student_id": student_id,
+        "name": student["name"],
+        "roll_no": student["roll_no"],
+        "count": count,
+    }, room=f"faculty_{session_id}")
 
-    emit("join_success", {
-        "student_id": student_id, "name": name,
-        "option_seed": option_seed, "session_id": session_id,
-    })
 
-    emit("student_joined", {
-        "name": name, "roll_no": roll_no,
-        "student_id": student_id, "count": count,
-    }, to=f"faculty_{session_id}")
+@socketio.on("reject_student")
+def handle_reject_student(data):
+    student_id = int(data.get("student_id", 0))
+    session_id = int(data.get("session_id", 0))
+    with get_db() as conn:
+        conn.execute("UPDATE students SET status='rejected' WHERE id=?", (student_id,))
+    socketio.emit("join_rejected", {
+        "message": "Your join request was declined by the teacher."
+    }, room=f"student_{student_id}")
+
+
+@socketio.on("allow_retake")
+def handle_allow_retake(data):
+    student_id = int(data.get("student_id", 0))
+    session_id = int(data.get("session_id", 0))
+    retake_type = data.get("retake_type", "same")
+
+    with get_db() as conn:
+        conn.execute("DELETE FROM answers WHERE student_id=?", (student_id,))
+        if retake_type == "new":
+            conn.execute("DELETE FROM student_questions WHERE student_id=?", (student_id,))
+        new_seed = random.randint(1, 2**31 - 1)
+        conn.execute(
+            "UPDATE students SET option_seed=?, status='approved' WHERE id=?",
+            (new_seed, student_id),
+        )
+        student = conn.execute("SELECT * FROM students WHERE id=?", (student_id,)).fetchone()
+        session_row = conn.execute("SELECT * FROM sessions WHERE id=?", (session_id,)).fetchone()
+        questions, _ = _get_or_assign_questions(conn, student_id, session_id)
+
+    import datetime
+    time_remaining = session_row["time_limit_seconds"] or 1800
+    if session_row["started_at"] and session_row["status"] == "active":
+        try:
+            started_at = datetime.datetime.fromisoformat(session_row["started_at"])
+            elapsed = (datetime.datetime.utcnow() - started_at).total_seconds()
+            time_remaining = max(60, int(time_remaining - elapsed))
+        except Exception:
+            pass
+
+    socketio.emit("retake_granted", {
+        "questions": questions,
+        "time_limit_seconds": time_remaining,
+        "option_seed": new_seed,
+    }, room=f"student_{student_id}")
+
+
+@socketio.on("final_submit")
+def handle_final_submit(data):
+    student_id = int(data.get("student_id", 0))
+    session_id = int(data.get("session_id", 0))
+    with get_db() as conn:
+        conn.execute("UPDATE students SET status='submitted' WHERE id=?", (student_id,))
+        assigned = conn.execute(
+            "SELECT COUNT(*) FROM student_questions WHERE student_id=?", (student_id,)
+        ).fetchone()[0]
+        answered = conn.execute(
+            "SELECT COUNT(*) FROM answers WHERE student_id=?", (student_id,)
+        ).fetchone()[0]
+        correct = conn.execute(
+            "SELECT COUNT(*) FROM answers WHERE student_id=? AND is_correct=1", (student_id,)
+        ).fetchone()[0]
+    socketio.emit("student_submitted", {"student_id": student_id}, room=f"faculty_{session_id}")
+    socketio.emit("student_progress", {
+        "student_id": student_id,
+        "answered": answered,
+        "assigned": assigned,
+        "correct": correct,
+        "done": True,
+        "submitted": True,
+    }, room=f"faculty_{session_id}")
 
 
 @socketio.on("start_quiz")
@@ -949,7 +1100,7 @@ def handle_start_quiz(data):
         ).fetchall()
 
         students = conn.execute(
-            "SELECT * FROM students WHERE session_id=?", (session_id,)
+            "SELECT * FROM students WHERE session_id=? AND status='approved'", (session_id,)
         ).fetchall()
 
         conn.execute(
@@ -1029,6 +1180,12 @@ def handle_submit_answer(data):
         if not question:
             return
 
+        student_row = conn.execute(
+            "SELECT status FROM students WHERE id=?", (student_id,)
+        ).fetchone()
+        if student_row and student_row["status"] == "submitted":
+            return
+
         session_id = question["session_id"]
         if question["type"] == "short_answer":
             is_correct = 0  # pending AI grading
@@ -1054,19 +1211,7 @@ def handle_submit_answer(data):
             "SELECT COUNT(*) FROM answers WHERE student_id=? AND is_correct=1", (student_id,)
         ).fetchone()[0]
 
-    if question["type"] == "short_answer":
-        emit("answer_confirmed", {
-            "question_id": question_id,
-            "is_correct": None,
-            "correct_answer": None,
-            "pending_ai_grade": True,
-        })
-    else:
-        emit("answer_confirmed", {
-            "question_id": question_id,
-            "is_correct": bool(is_correct),
-            "correct_answer": question["correct_answer"],
-        })
+    emit("answer_confirmed", {"question_id": question_id})
 
     # Notify faculty live progress
     socketio.emit("student_progress", {

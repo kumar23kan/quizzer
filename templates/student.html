@@ -147,6 +147,34 @@
     </div>
   </div>
 
+  <div class="state text-center" id="state-pending">
+    <div class="card">
+      <div class="pulse-ring">
+        <svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm1 14.93V17a1 1 0 0 1-2 0v-.07A8 8 0 0 1 4.07 11H4a1 1 0 0 1 0-2h.07A8 8 0 0 1 11 3.07V3a1 1 0 0 1 2 0v.07A8 8 0 0 1 19.93 11H20a1 1 0 0 1 0 2h-.07A8 8 0 0 1 13 16.93z"/></svg>
+      </div>
+      <div style="font-size:1.1rem;font-weight:700;margin-bottom:.5rem">Waiting for Approval</div>
+      <div class="text-muted" style="font-size:.9rem;margin-bottom:.25rem" id="pending-student-name"></div>
+      <div class="text-muted" style="font-size:.85rem">Your teacher needs to approve your join request.</div>
+    </div>
+  </div>
+
+  <div class="state" id="state-rules">
+    <div class="card">
+      <div style="font-size:1.1rem;font-weight:700;margin-bottom:1rem">Quiz Rules</div>
+      <div id="rules-content" style="margin-bottom:1.25rem"></div>
+      <button class="btn btn-success" onclick="startQuizFromRules()">I'm Ready — Start Quiz</button>
+    </div>
+  </div>
+
+  <div class="state text-center" id="state-confirm-submit">
+    <div class="card">
+      <div style="font-size:1.2rem;font-weight:700;margin-bottom:.75rem">Submit Quiz?</div>
+      <div style="font-size:.9rem;color:var(--muted);margin-bottom:.5rem" id="confirm-answered"></div>
+      <div style="font-size:.82rem;color:var(--muted);margin-bottom:1.5rem">Once submitted you cannot change your answers.</div>
+      <button class="btn btn-success" onclick="doFinalSubmit()">Yes, Submit Quiz</button>
+    </div>
+  </div>
+
   <div class="state" id="state-question">
     <div class="card">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">
@@ -187,6 +215,10 @@
         </div>
       </div>
       <div style="font-size:.85rem;color:var(--muted);margin-top:1rem" id="done-sub"></div>
+      <div id="answers-review" style="display:none;margin-top:1.25rem">
+        <div style="font-size:.82rem;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;border-top:1px solid var(--border);padding-top:1.25rem;margin-bottom:.75rem">Your Answers</div>
+        <div id="review-list"></div>
+      </div>
     </div>
   </div>
 
@@ -202,6 +234,7 @@ let myQuestions   = [];
 let answeredIds   = new Set();
 let currentQPos   = 0;
 let correctCount  = 0;
+let finalSubmitDone = false;
 let quizTimerInterval  = null;
 let quizEndsAt         = null;
 let perQTimerInterval  = null;
@@ -276,38 +309,104 @@ function initSocket() {
     setBtn('btn-join', false, 'Join Quiz');
   });
 
+  socket.on('pending_approval', ({ student_id, name }) => {
+    myStudentId = student_id;
+    myName = name;
+    document.getElementById('pending-student-name').textContent = `Submitted as: ${name}`;
+    setBtn('btn-join', false, 'Join Quiz');
+    setState('pending');
+  });
+
+  socket.on('join_rejected', ({ message }) => {
+    showJoinError(message || 'Your join request was declined.');
+    setBtn('btn-join', false, 'Join Quiz');
+    setState('join');
+  });
+
+  socket.on('retake_granted', ({ questions, time_limit_seconds, option_seed }) => {
+    myOptionSeed = option_seed;
+    myQuestions = questions;
+    answeredIds = new Set();
+    currentQPos = 0;
+    correctCount = 0;
+    finalSubmitDone = false;
+    clearInterval(quizTimerInterval);
+    clearInterval(perQTimerInterval);
+    startQuizTimer(time_limit_seconds);
+    showRules(time_limit_seconds);
+  });
+
   socket.on('quiz_started', ({ questions, time_limit_seconds, answered_ids }) => {
     myQuestions = questions;
     answeredIds = new Set(answered_ids || []);
     currentQPos = myQuestions.findIndex(q => !answeredIds.has(q.id));
     if (currentQPos === -1) currentQPos = myQuestions.length;
     correctCount = 0;
+    finalSubmitDone = false;
     startQuizTimer(time_limit_seconds);
     if (currentQPos >= myQuestions.length) {
       showDone();
     } else {
-      renderQuestion(currentQPos);
-      setState('question');
+      showRules(time_limit_seconds);
     }
   });
 
-  socket.on('answer_confirmed', ({ question_id, is_correct, correct_answer, pending_ai_grade }) => {
+  socket.on('answer_confirmed', ({ question_id }) => {
     answeredIds.add(question_id);
-    if (pending_ai_grade) {
-      const fb = document.getElementById('q-feedback');
-      fb.className = 'feedback show correct-fb';
-      fb.textContent = 'Answer submitted — your teacher will grade it after the quiz.';
-      setTimeout(() => { document.getElementById('btn-next').style.display = 'flex'; }, 600);
-    } else {
-      if (is_correct) correctCount++;
-      showFeedback(is_correct, correct_answer);
+    const fb = document.getElementById('q-feedback');
+    fb.className = 'feedback show correct-fb';
+    fb.textContent = 'Answer submitted.';
+    setTimeout(() => { document.getElementById('btn-next').style.display = 'flex'; }, 600);
+  });
+
+  socket.on('answers_revealed', async () => {
+    if (!myStudentId) return;
+    try {
+      const data = await fetch(`/api/session/${SESSION_ID}/my-answers/${myStudentId}`).then(r => r.json());
+      const pct = data.mcq_total > 0 ? Math.round(data.mcq_correct / data.mcq_total * 100) : 0;
+
+      document.getElementById('stars-display').style.display = '';
+      document.getElementById('stars-display').textContent = pct >= 80 ? '★★★' : pct >= 50 ? '★★☆' : '★☆☆';
+      const circle = document.getElementById('score-circle');
+      circle.style.display = '';
+      circle.style.setProperty('--pct', pct);
+      document.getElementById('score-num').textContent = `${data.mcq_correct}/${data.mcq_total}`;
+      document.getElementById('score-pct').textContent = `${pct}%`;
+
+      const hasSA = data.answers.some(a => a.type === 'short_answer');
+      document.getElementById('done-sub').textContent = hasSA
+        ? 'Short answer marks will be updated by your teacher.'
+        : (pct >= 80 ? 'Excellent work!' : pct >= 50 ? 'Good effort! Keep practicing.' : 'Keep studying — you can do it!');
+
+      const reviewList = document.getElementById('review-list');
+      reviewList.innerHTML = '';
+      data.answers.forEach((a, i) => {
+        const isSA  = a.type === 'short_answer';
+        const ok    = !isSA && a.is_correct;
+        const color = isSA ? 'var(--yellow)' : ok ? 'var(--green)' : 'var(--red)';
+        const icon  = isSA ? '?' : ok ? '✓' : '✗';
+        let answerLine;
+        if (isSA) {
+          answerLine = `Your answer: <em>${escHtml(a.your_answer)}</em>`;
+          if (a.ai_feedback) answerLine += `<br><span style="color:var(--muted)">AI feedback: ${escHtml(a.ai_feedback)}</span>`;
+        } else if (ok) {
+          answerLine = `<span style="color:var(--green)">${escHtml(a.your_answer)}</span>`;
+        } else {
+          answerLine = `Your answer: <span style="color:var(--red)">${escHtml(a.your_answer || '(no answer)')}</span>`
+                     + ` · Correct: <span style="color:var(--green)">${escHtml(a.correct_answer)}</span>`;
+        }
+        reviewList.innerHTML += `<div style="border:1px solid var(--border);border-radius:10px;padding:.75rem;margin-bottom:.5rem;text-align:left"><div style="display:flex;align-items:flex-start;gap:.5rem"><span style="color:${color};font-weight:700;flex-shrink:0;margin-top:.05rem">${icon}</span><div style="font-size:.85rem"><div style="font-weight:600;margin-bottom:.25rem">Q${i + 1}: ${escHtml(a.question_text)}</div><div style="font-size:.8rem;color:var(--muted)">${answerLine}</div></div></div></div>`;
+      });
+
+      document.getElementById('answers-review').style.display = '';
+    } catch(e) {
+      console.error('Failed to load answers:', e);
     }
   });
 
   socket.on('quiz_ended', () => {
-    clearInterval(quizTimerInterval);
     clearInterval(perQTimerInterval);
-    showDone();
+    doFinalSubmit();
   });
 
   socket.on('timer_extended', ({ extend_by_seconds }) => {
@@ -389,9 +488,10 @@ function renderQuestion(pos) {
     optsList.appendChild(wrap);
   } else {
     document.getElementById('q-type-lbl').textContent = q.type === 'mcq' ? 'Multiple Choice' : 'True / False';
-    const displayOptions = q.type === 'mcq'
-      ? seededShuffle(q.options || [], myOptionSeed + q.id)
-      : ['True', 'False'];
+    const displayOptions = seededShuffle(
+      q.type === 'mcq' ? (q.options || []) : ['True', 'False'],
+      myOptionSeed + q.id
+    );
     displayOptions.forEach((opt, i) => {
       const btn = document.createElement('button');
       btn.className = 'opt-btn';
@@ -460,7 +560,7 @@ function showFeedback(is_correct, correct_answer) {
 
 function showNextQuestion() {
   currentQPos++;
-  if (currentQPos >= myQuestions.length) showDone();
+  if (currentQPos >= myQuestions.length) showConfirmSubmit();
   else renderQuestion(currentQPos);
 }
 
@@ -514,7 +614,7 @@ function startQuizTimer(totalSeconds) {
     const el = document.getElementById('hdr-timer');
     el.textContent = `${m}:${s}`;
     el.className = 'timer-hdr' + (rem < 120 ? ' urgent' : '');
-    if (rem === 0) { clearInterval(quizTimerInterval); showDone(); }
+    if (rem === 0) { clearInterval(quizTimerInterval); doFinalSubmit(); }
   }, 1000);
 }
 
@@ -523,19 +623,67 @@ function showDone() {
   clearInterval(perQTimerInterval);
   document.getElementById('hdr-progress').style.display = 'none';
   document.getElementById('hdr-timer').style.display = 'none';
-  const answered = answeredIds.size;
-  const score    = correctCount;
-  const pct      = answered > 0 ? Math.round(score / answered * 100) : 0;
-  document.getElementById('stars-display').textContent = pct >= 80 ? '★★★' : pct >= 50 ? '★★☆' : '★☆☆';
-  document.getElementById('score-circle').style.setProperty('--pct', pct);
-  document.getElementById('score-num').textContent = `${score}/${answered}`;
-  document.getElementById('score-pct').textContent = `${pct}%`;
+  document.getElementById('stars-display').style.display = 'none';
+  document.getElementById('score-circle').style.display = 'none';
+  document.getElementById('answers-review').style.display = 'none';
   document.getElementById('done-name').textContent = `Well done, ${myName}!`;
-  const hasSA = myQuestions.some(q => q.type === 'short_answer');
-  document.getElementById('done-sub').textContent = hasSA
-    ? 'Short answer questions will be graded by your teacher — your score may increase.'
-    : (pct >= 80 ? 'Excellent work!' : pct >= 50 ? 'Good effort! Keep practicing.' : 'Keep studying — you can do it!');
+  document.getElementById('done-sub').textContent = 'Waiting for teacher to reveal answers…';
   setState('done');
+}
+
+function showRules(timeLimitSec) {
+  const mins = Math.floor((timeLimitSec || 0) / 60);
+  const secs = (timeLimitSec || 0) % 60;
+  const timeStr = mins > 0 ? `${mins} min${secs > 0 ? ` ${secs}s` : ''}` : `${secs}s`;
+  const typeMap = { mcq: 'Multiple Choice', true_false: 'True / False', short_answer: 'Short Answer' };
+  const types = [...new Set(myQuestions.map(q => q.type))].map(t => typeMap[t] || t);
+  const totalMarks = myQuestions.reduce((s, q) => s + (q.marks || 1), 0);
+  const hasSA = myQuestions.some(q => q.type === 'short_answer');
+  document.getElementById('rules-content').innerHTML = `
+    <div style="display:flex;flex-direction:column;gap:.65rem;text-align:left;margin-bottom:1rem">
+      <div style="display:flex;justify-content:space-between;padding:.6rem .9rem;background:var(--surface2);border-radius:8px">
+        <span style="color:var(--muted);font-size:.85rem">Questions</span>
+        <strong>${myQuestions.length}</strong>
+      </div>
+      <div style="display:flex;justify-content:space-between;padding:.6rem .9rem;background:var(--surface2);border-radius:8px">
+        <span style="color:var(--muted);font-size:.85rem">Time Limit</span>
+        <strong>${timeStr}</strong>
+      </div>
+      <div style="display:flex;justify-content:space-between;padding:.6rem .9rem;background:var(--surface2);border-radius:8px">
+        <span style="color:var(--muted);font-size:.85rem">Types</span>
+        <strong style="text-align:right">${escHtml(types.join(', '))}</strong>
+      </div>
+      <div style="display:flex;justify-content:space-between;padding:.6rem .9rem;background:var(--surface2);border-radius:8px">
+        <span style="color:var(--muted);font-size:.85rem">Total Marks</span>
+        <strong>${totalMarks}</strong>
+      </div>
+    </div>
+    <div style="font-size:.8rem;color:var(--muted);line-height:1.55">
+      Answer option order is unique to you. ${hasSA ? 'Short answers will be graded by your teacher. ' : ''}Correct answers will be revealed by your teacher after the quiz.
+    </div>`;
+  setState('rules');
+}
+
+function startQuizFromRules() {
+  renderQuestion(currentQPos);
+  setState('question');
+}
+
+function showConfirmSubmit() {
+  document.getElementById('confirm-answered').textContent =
+    `You answered ${answeredIds.size} of ${myQuestions.length} questions.`;
+  setState('confirm-submit');
+}
+
+function doFinalSubmit() {
+  if (finalSubmitDone) { showDone(); return; }
+  finalSubmitDone = true;
+  clearInterval(quizTimerInterval);
+  clearInterval(perQTimerInterval);
+  if (myStudentId && SESSION_ID_live) {
+    socket.emit('final_submit', { student_id: myStudentId, session_id: SESSION_ID_live });
+  }
+  showDone();
 }
 
 function seededShuffle(arr, seed) {
