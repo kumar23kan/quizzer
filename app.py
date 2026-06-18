@@ -1384,9 +1384,20 @@ def _force_end_quiz(session_id: int):
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
+def _clear_students_on_startup():
+    """Remove all student rows left over from a previous run.
+    The hotspot is never running at startup, so any connected students
+    in the DB are stale and must be cleared before the faculty page loads."""
+    with get_db() as conn:
+        conn.execute("DELETE FROM student_questions WHERE student_id IN (SELECT id FROM students)")
+        conn.execute("DELETE FROM answers WHERE student_id IN (SELECT id FROM students)")
+        conn.execute("DELETE FROM students")
+
+
 if __name__ == "__main__":
     init_db()
     _migrate_db()
+    _clear_students_on_startup()
     print("=" * 60)
     print("  Quizzer — Classroom Quiz Server")
     print("=" * 60)

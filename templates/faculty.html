@@ -599,9 +599,9 @@ let countdownTimer = null;
 let pollTimer     = null;
 let socket;
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
   loadModels();
-  loadHotspotStatus();
+  await loadHotspotStatus();   // must finish before loadStudentsFromServer checks _hsRunning
   initSocket();
 
   if (INIT) {
@@ -1019,7 +1019,7 @@ function openLobbyUI() {
 }
 
 async function loadStudentsFromServer() {
-  if (!sessionId) return;
+  if (!sessionId || !_hsRunning) return;
   try {
     const students = await fetch(`/api/students/${sessionId}`).then(r=>r.json());
     totalStudents = students.length;
