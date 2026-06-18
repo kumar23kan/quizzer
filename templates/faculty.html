@@ -640,7 +640,11 @@ function initSocket() {
   socket = io({ transports: ['websocket', 'polling'] });
   socket.on('connect', () => {
     setConn(true);
-    if (sessionId) socket.emit('faculty_join', { session_id: sessionId });
+    if (sessionId) {
+      // Clear stale UI state before requesting a fresh replay from the server.
+      clearStudentList();
+      socket.emit('faculty_join', { session_id: sessionId });
+    }
   });
   socket.on('disconnect', () => setConn(false));
 
@@ -648,6 +652,19 @@ function initSocket() {
     totalStudents = count;
     document.getElementById('s-count').textContent = count;
     appendStudentChip(name, roll_no);
+    const btn = document.getElementById('btn-start');
+    btn.disabled = false;
+    btn.textContent = `Start Quiz  (${count} student${count !== 1 ? 's' : ''} ready)`;
+    document.getElementById('pi-total').textContent = count;
+  });
+
+  // Already-approved student reconnected — update count but don't add a duplicate chip
+  socket.on('student_rejoined', ({ name, roll_no, count }) => {
+    totalStudents = count;
+    document.getElementById('s-count').textContent = count;
+    if (!document.querySelector(`[data-roll="${escHtml(roll_no)}"]`)) {
+      appendStudentChip(name, roll_no);
+    }
     const btn = document.getElementById('btn-start');
     btn.disabled = false;
     btn.textContent = `Start Quiz  (${count} student${count !== 1 ? 's' : ''} ready)`;
@@ -1514,6 +1531,7 @@ async function submitAddQuestion() {
 function appendStudentChip(name, roll) {
   const c = document.createElement('div');
   c.className = 's-chip';
+  c.dataset.roll = roll;
   c.innerHTML = `<div class="s-av">${escHtml((name[0]||'?').toUpperCase())}</div><span>${escHtml(name)}</span><span class="s-roll">${escHtml(roll)}</span>`;
   document.getElementById('s-list').appendChild(c);
 }

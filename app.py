@@ -1030,8 +1030,12 @@ def handle_student_join(data):
         join_room(f"session_{session_id}")
         join_room(f"student_{student_id}")
 
-        # Reconnect: already approved or submitted — skip approval
+        # Reconnect: already approved or submitted — skip approval queue
         if student_status in ("approved", "submitted"):
+            approved_count = conn.execute(
+                "SELECT COUNT(*) FROM students WHERE session_id=? AND status IN ('approved','submitted')",
+                (session_id,),
+            ).fetchone()[0]
             if session_row["status"] == "active":
                 questions, already_answered = _get_or_assign_questions(
                     conn, student_id, session_id
@@ -1050,6 +1054,10 @@ def handle_student_join(data):
                     "student_id": student_id, "name": name,
                     "option_seed": option_seed, "session_id": session_id,
                 })
+                # Notify faculty so the lobby count stays accurate after reconnects
+                socketio.emit("student_rejoined", {
+                    "name": name, "roll_no": roll_no, "count": approved_count,
+                }, room=f"faculty_{session_id}")
             return
 
         # New or pending — needs faculty approval
