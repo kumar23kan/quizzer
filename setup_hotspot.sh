@@ -179,9 +179,13 @@ iptables -t nat -A PREROUTING -i "$WIFI_IFACE" -p tcp --dport 53 -j DNAT --to-de
 iptables -A FORWARD -i "$WIFI_IFACE" -p tcp --dport 853 -j DROP
 iptables -A FORWARD -i "$WIFI_IFACE" -p udp --dport 853 -j DROP
 
-# Redirect student HTTP/HTTPS to quiz server → triggers captive portal detection
+# Redirect student HTTP to quiz server → triggers captive portal detection
 iptables -t nat -A PREROUTING -i "$WIFI_IFACE" -p tcp --dport 80  -j DNAT --to-destination "${SERVER_IP}:${PORT}"
-iptables -t nat -A PREROUTING -i "$WIFI_IFACE" -p tcp --dport 443 -j DNAT --to-destination "${SERVER_IP}:${PORT}"
+# DROP student HTTPS — do NOT redirect to our HTTP server.
+# Redirecting port 443 floods the HTTP server with raw TLS handshake bytes,
+# which gevent processes as malformed requests, starving socket.io handlers.
+# iOS/Android fall back to their HTTP captive-portal probe automatically.
+iptables -A FORWARD -i "$WIFI_IFACE" -p tcp --dport 443 -j DROP
 
 # Save current config for teardown reference
 echo "$WIFI_IFACE" > /tmp/quizzer_iface
