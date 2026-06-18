@@ -374,7 +374,19 @@
     </div>
 
     <div id="pending-section" style="display:none;background:rgba(245,158,11,.07);border:1px solid rgba(245,158,11,.3);border-radius:10px;padding:1rem 1.25rem;margin-bottom:1.25rem">
-      <div style="font-size:.85rem;font-weight:600;color:var(--yellow);margin-bottom:.65rem">Pending Approval <span id="pending-count" style="background:rgba(245,158,11,.25);border-radius:999px;padding:1px 10px;font-size:.75rem;margin-left:.35rem">0</span></div>
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.5rem;margin-bottom:.65rem">
+        <label style="display:flex;align-items:center;gap:.5rem;cursor:pointer">
+          <input type="checkbox" id="pending-select-all" onchange="toggleSelectAll(this.checked)" style="width:14px;height:14px;cursor:pointer;accent-color:var(--yellow)">
+          <span style="font-size:.85rem;font-weight:600;color:var(--yellow)">Pending Approval</span>
+          <span id="pending-count" style="background:rgba(245,158,11,.25);border-radius:999px;padding:1px 10px;font-size:.75rem">0</span>
+        </label>
+        <div style="display:flex;gap:.4rem;flex-wrap:wrap">
+          <button id="btn-approve-selected" onclick="approveSelectedStudents()" style="display:none;padding:3px 10px;border-radius:6px;border:1px solid var(--green);background:transparent;color:var(--green);font-size:.78rem;cursor:pointer;font-weight:600">Approve Selected (<span id="selected-count">0</span>)</button>
+          <button id="btn-reject-selected"  onclick="rejectSelectedStudents()"  style="display:none;padding:3px 10px;border-radius:6px;border:1px solid var(--red);background:transparent;color:var(--red);font-size:.78rem;cursor:pointer">Reject Selected</button>
+          <button onclick="approveAllStudents()" style="padding:3px 10px;border-radius:6px;border:1px solid var(--green);background:rgba(34,197,94,.12);color:var(--green);font-size:.78rem;cursor:pointer;font-weight:600">Approve All</button>
+          <button onclick="rejectAllStudents()"  style="padding:3px 10px;border-radius:6px;border:1px solid var(--red);background:transparent;color:var(--red);font-size:.78rem;cursor:pointer">Reject All</button>
+        </div>
+      </div>
       <div id="pending-list" style="display:flex;flex-direction:column;gap:.45rem"></div>
     </div>
     <div class="s-list" id="s-list"></div>
@@ -645,6 +657,17 @@ function initSocket() {
     btn.disabled = false;
     btn.textContent = `Start Quiz  (${count} student${count !== 1 ? 's' : ''} ready)`;
     document.getElementById('pi-total').textContent = count;
+  });
+
+  socket.on('students_approved_bulk', ({ students, count }) => {
+    totalStudents = count;
+    document.getElementById('s-count').textContent = count;
+    students.forEach(s => appendStudentChip(s.name, s.roll_no));
+    const btn = document.getElementById('btn-start');
+    btn.disabled = false;
+    btn.textContent = `Start Quiz  (${count} student${count !== 1 ? 's' : ''} ready)`;
+    document.getElementById('pi-total').textContent = count;
+    toast(`${students.length} student${students.length !== 1 ? 's' : ''} approved.`);
   });
 
   socket.on('student_submitted', ({ student_id }) => {
@@ -1484,14 +1507,14 @@ function appendStudentChip(name, roll) {
 }
 
 function addPendingRow(studentId, name, roll) {
-  const existing = document.getElementById(`pend-${studentId}`);
-  if (existing) return;
-  const section = document.getElementById('pending-section');
-  section.style.display = '';
+  if (document.getElementById(`pend-${studentId}`)) return;
+  document.getElementById('pending-section').style.display = '';
   const row = document.createElement('div');
   row.id = `pend-${studentId}`;
   row.style.cssText = 'display:flex;align-items:center;gap:.65rem;padding:.5rem .65rem;background:var(--surface2);border-radius:8px';
-  row.innerHTML = `<div class="s-av">${escHtml((name[0]||'?').toUpperCase())}</div>
+  row.innerHTML = `
+    <input type="checkbox" class="pending-cb" data-id="${studentId}" onchange="updateBulkButtons()" style="width:14px;height:14px;cursor:pointer;accent-color:var(--green);flex-shrink:0">
+    <div class="s-av">${escHtml((name[0]||'?').toUpperCase())}</div>
     <span style="flex:1;font-size:.875rem">${escHtml(name)}</span>
     <span style="font-size:.78rem;color:var(--muted)">${escHtml(roll)}</span>
     <button onclick="approveStudent(${studentId})" style="padding:3px 10px;border-radius:6px;border:1px solid var(--green);background:transparent;color:var(--green);font-size:.78rem;cursor:pointer;font-weight:600">Approve</button>
@@ -1505,11 +1528,34 @@ function removePendingRow(studentId) {
   const row = document.getElementById(`pend-${studentId}`);
   if (!row) return;
   row.remove();
-  const list = document.getElementById('pending-list');
   const cnt = document.getElementById('pending-count');
   const n = Math.max(0, parseInt(cnt.textContent || '1') - 1);
   cnt.textContent = n;
   if (n === 0) document.getElementById('pending-section').style.display = 'none';
+  updateBulkButtons();
+}
+
+function _pendingCheckedIds() {
+  return [...document.querySelectorAll('.pending-cb:checked')].map(cb => parseInt(cb.dataset.id));
+}
+
+function _allPendingIds() {
+  return [...document.querySelectorAll('.pending-cb')].map(cb => parseInt(cb.dataset.id));
+}
+
+function updateBulkButtons() {
+  const checked = _pendingCheckedIds().length;
+  const total   = _allPendingIds().length;
+  document.getElementById('btn-approve-selected').style.display = checked > 0 ? '' : 'none';
+  document.getElementById('btn-reject-selected').style.display  = checked > 0 ? '' : 'none';
+  document.getElementById('selected-count').textContent = checked;
+  document.getElementById('pending-select-all').indeterminate = checked > 0 && checked < total;
+  document.getElementById('pending-select-all').checked = total > 0 && checked === total;
+}
+
+function toggleSelectAll(checked) {
+  document.querySelectorAll('.pending-cb').forEach(cb => cb.checked = checked);
+  updateBulkButtons();
 }
 
 function approveStudent(studentId) {
@@ -1520,6 +1566,39 @@ function approveStudent(studentId) {
 function rejectStudent(studentId) {
   socket.emit('reject_student', { student_id: studentId, session_id: sessionId });
   removePendingRow(studentId);
+}
+
+function approveSelectedStudents() {
+  const ids = _pendingCheckedIds();
+  if (!ids.length) return;
+  socket.emit('approve_students_bulk', { student_ids: ids, session_id: sessionId });
+  ids.forEach(id => removePendingRow(id));
+}
+
+function rejectSelectedStudents() {
+  const ids = _pendingCheckedIds();
+  if (!ids.length) return;
+  ids.forEach(id => {
+    socket.emit('reject_student', { student_id: id, session_id: sessionId });
+    removePendingRow(id);
+  });
+}
+
+function approveAllStudents() {
+  const ids = _allPendingIds();
+  if (!ids.length) return;
+  socket.emit('approve_students_bulk', { student_ids: ids, session_id: sessionId });
+  ids.forEach(id => removePendingRow(id));
+}
+
+function rejectAllStudents() {
+  const ids = _allPendingIds();
+  if (!ids.length) return;
+  if (!confirm(`Reject all ${ids.length} pending students?`)) return;
+  ids.forEach(id => {
+    socket.emit('reject_student', { student_id: id, session_id: sessionId });
+    removePendingRow(id);
+  });
 }
 
 let _retakeStudentId = null;

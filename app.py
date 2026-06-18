@@ -1018,6 +1018,49 @@ def handle_approve_student(data):
     }, room=f"faculty_{session_id}")
 
 
+@socketio.on("approve_students_bulk")
+def handle_approve_students_bulk(data):
+    student_ids = [int(x) for x in data.get("student_ids", [])]
+    session_id  = int(data.get("session_id", 0))
+    if not student_ids:
+        return
+
+    approved = []
+    with get_db() as conn:
+        session_row = conn.execute("SELECT * FROM sessions WHERE id=?", (session_id,)).fetchone()
+        if not session_row:
+            return
+        for student_id in student_ids:
+            conn.execute("UPDATE students SET status='approved' WHERE id=?", (student_id,))
+            student = conn.execute("SELECT * FROM students WHERE id=?", (student_id,)).fetchone()
+            if not student:
+                continue
+            if session_row["status"] == "active":
+                questions, already_answered = _get_or_assign_questions(conn, student_id, session_id)
+                socketio.emit("join_success", {
+                    "student_id": student_id, "name": student["name"],
+                    "option_seed": student["option_seed"], "session_id": session_id,
+                }, room=f"student_{student_id}")
+                socketio.emit("quiz_started", {
+                    "questions": questions,
+                    "time_limit_seconds": session_row["time_limit_seconds"] or 1800,
+                    "answered_ids": already_answered,
+                }, room=f"student_{student_id}")
+            else:
+                socketio.emit("join_success", {
+                    "student_id": student_id, "name": student["name"],
+                    "option_seed": student["option_seed"], "session_id": session_id,
+                }, room=f"student_{student_id}")
+            approved.append({"student_id": student_id, "name": student["name"], "roll_no": student["roll_no"]})
+
+        count = conn.execute(
+            "SELECT COUNT(*) FROM students WHERE session_id=? AND status='approved'", (session_id,)
+        ).fetchone()[0]
+
+    socketio.emit("students_approved_bulk", {"students": approved, "count": count},
+                  room=f"faculty_{session_id}")
+
+
 @socketio.on("reject_student")
 def handle_reject_student(data):
     student_id = int(data.get("student_id", 0))
